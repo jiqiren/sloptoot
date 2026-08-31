@@ -98,32 +98,6 @@ static void print_trunc(const char *s, unsigned width) {
   printf("%s\n", line);
 }
 
-/* Compute the largest `cols` x `rows` cell rectangle for an image that fits
- * within `cmax` x `rmax` cells while preserving the image's aspect ratio
- * (using the terminal's character cell pixel size). Both cells must be >= 1. */
-static void fit_aspect(const img_image *im, unsigned cmax, unsigned rmax,
-                       unsigned cell_w, unsigned cell_h, unsigned *cols,
-                       unsigned *rows) {
-  double pxw = (double)im->frames[0].width;
-  double pxh = (double)im->frames[0].height;
-  if (pxw <= 0 || pxh <= 0 || cell_w == 0 || cell_h == 0) {
-    *cols = cmax;
-    *rows = rmax;
-    return;
-  }
-  /* Height in cells a given width needs: cols * (pxh/pxw) * (cell_w/cell_h). */
-  double h_at_cmax = (double)cmax * (pxh / pxw) * ((double)cell_w / (double)cell_h);
-  if (h_at_cmax <= (double)rmax) {
-    *cols = cmax > 0 ? cmax : 1;
-    *rows = (unsigned)(h_at_cmax > 1.0 ? h_at_cmax : 1.0);
-  } else {
-    *rows = rmax > 0 ? rmax : 1;
-    double c_at_rmax =
-        (double)rmax * (pxw / pxh) * ((double)cell_h / (double)cell_w);
-    *cols = (unsigned)(c_at_rmax > 1.0 ? c_at_rmax : 1.0);
-  }
-}
-
 int view_status(const char *ref, bool mobile) {
   char *id = normalize_status_id(ref);
   if (id == nullptr) {
@@ -410,7 +384,7 @@ int view_status(const char *ref, bool mobile) {
       size_t e = 0;
       while (e < nents && !ents[e].ok) e++;
       unsigned c = 0, r = 0;
-      fit_aspect(&ents[e].im, tcols - tw, trows, cw, ch, &c, &r);
+      img_fit_aspect(&ents[e].im, tcols - tw, trows, cw, ch, &c, &r);
       printf("\x1b[1;%uH", tw + 1);
       kgraphics_render(&ents[e].im, c, r, true);
       /* Park the cursor just below the taller of the text pane and the image
@@ -440,7 +414,7 @@ int view_status(const char *ref, bool mobile) {
                              sum);
         if (alloc < 6) alloc = 6;
         unsigned c = 0, r = 0;
-        fit_aspect(&ents[e].im, tcols - 1, alloc, cw, ch, &c, &r);
+        img_fit_aspect(&ents[e].im, tcols - 1, alloc, cw, ch, &c, &r);
         kgraphics_render(&ents[e].im, c, r, false);
       }
     }

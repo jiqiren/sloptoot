@@ -32,4 +32,12 @@ typedef struct {
 [[nodiscard]] int img_encode_png(const img_frame *f, uint8_t **out,
                                  size_t *outlen);
 
+/* Compute the largest `cols` x `rows` cell rectangle that displays the image
+ * within `cmax` x `rmax` cells while preserving its pixel aspect ratio, using
+ * the terminal's character cell size (`cell_w` x `cell_h` pixels). Both
+ * outputs are at least 1. */
+void img_fit_aspect(const img_image *im, unsigned cmax, unsigned rmax,
+                    unsigned cell_w, unsigned cell_h, unsigned *cols,
+                    unsigned *rows);
+
 void img_free(img_image *img);

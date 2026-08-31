@@ -408,3 +408,31 @@ int img_decode(const uint8_t *data, size_t len, img_image *out) {
     return img_decode_webp(data, len, out);
   return -1;
 }
+
+void img_fit_aspect(const img_image *im, unsigned cmax, unsigned rmax,
+                    unsigned cell_w, unsigned cell_h, unsigned *cols,
+                    unsigned *rows) {
+  if (cols == nullptr || rows == nullptr) return;
+  *cols = cmax > 0 ? cmax : 1;
+  *rows = rmax > 0 ? rmax : 1;
+  if (im == nullptr || im->nframes == 0 || cmax == 0 || rmax == 0 ||
+      cell_w == 0 || cell_h == 0) {
+    return;
+  }
+  double pxw = (double)im->frames[0].width;
+  double pxh = (double)im->frames[0].height;
+  if (pxw <= 0 || pxh <= 0) return;
+
+  /* Height in cells a given width needs: cols * (pxh/pxw) * (cell_w/cell_h). */
+  double h_at_cmax =
+      (double)cmax * (pxh / pxw) * ((double)cell_w / (double)cell_h);
+  if (h_at_cmax <= (double)rmax) {
+    *cols = cmax > 0 ? cmax : 1;
+    *rows = (unsigned)(h_at_cmax > 1.0 ? h_at_cmax : 1.0);
+  } else {
+    *rows = rmax > 0 ? rmax : 1;
+    double c_at_rmax =
+        (double)rmax * (pxw / pxh) * ((double)cell_h / (double)cell_w);
+    *cols = (unsigned)(c_at_rmax > 1.0 ? c_at_rmax : 1.0);
+  }
+}

@@ -79,6 +79,8 @@ Lists posts as plain text lines (`<id>  <relative-time>  <text>` with HTML strip
 
 By default `ls` fetches enough posts (paging via `max_id`, `limit=40`) to fill the terminal height minus two rows (via terminal rows from `TIOCGWINSZ`, fallback 24), so the shell prompt isn't pushed off. Only the posts that fit are printed.
 
+**Inline images** (kitty-capable terminals only): when the terminal supports the kitty graphics protocol (`kgraphics_supported()`), `ls` renders each post's author avatar (the reblogger's for boosts) to the left of the text — a two-row-tall, aspect-preserving placement drawn behind a reserved gutter — and stacks any image `media_attachments` below the post, capped at ~40% of the terminal height so a wide feed image never monopolizes the listing (the full image is one `view` away). Text is word-wrapped to the remaining width; a `C=1` avatar placement never moves the cursor, and the listing stops once the screen is full so the prompt stays below. In a terminal without kitty support, or for `--mobile` (cached rows have no avatar/media URLs), the listing falls back to the plain text rows described above.
+
 **Boosts** are shown specially: the first line shows the boost id, relative time, a 🚀 emoji, and the boosting account's handle; a second, slightly indented line (introduced by `⎣`) shows the id, relative time, and text of the originally boosted post (its `reblog`).
 - No argument or `profile` — your posts/replies: `GET /api/v1/accounts/{account_id}/statuses`.
 - `timeline` — your home timeline: `GET /api/v1/timelines/home`.
@@ -209,7 +211,7 @@ sloptoot/
 - `./build/sloptoot toot "hello"` → post visible.
 - `./build/sloptoot toot --reply` chains to the last post (after posting one); `--reply <id|url>` replies to a specific post.
 - `./build/sloptoot toot` with `EDITOR` set → editor opens, text posts; untouched buffer cancels with exit 0.
-- `./build/sloptoot ls`, `ls timeline`, `ls #tag` fetch and print (`-l`/`--long` wraps instead of truncating to the terminal width); `ls --mobile` serves cached rows without network.
+- `./build/sloptoot ls`, `ls timeline`, `ls #tag` fetch and print (`-l`/`--long` wraps instead of truncating to the terminal width); `ls --mobile` serves cached rows without network. In a kitty-capable terminal, `ls` renders the poster/reblogger avatar beside each row and image attachments below (aspect-preserved, capped to ~40% of the screen); in a non-supporting terminal or piped output it prints the plain text rows.
 - `./build/sloptoot delete <id-or-url>` removes a post from the server and cache.
 - `./build/sloptoot view <id-with-image>` in a kitty/ghostty/wezterm terminal renders PNG/JPEG/GIF/WebP attachments with the hybrid layout: side-by-side (text left / image right) in a ≥92-col terminal with a single image, otherwise stacked. In a non-supporting terminal or piped output it prints the plain `<type>`/alt-text listing instead. Animated GIFs/WebPs animate. `SLOPTOOT_FORCE_GFX=1 script -q log sh -c "./build/sloptoot view <id>"` captures the emitted APC sequences (`a=t`, `a=f`, `a=a`, `a=p`) for inspection.
 - Force OOB fallback (loopback bind failure); confirm paste flow works.

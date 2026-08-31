@@ -17,7 +17,7 @@ Then run `sloptoot login <instance>` to get started.
 - `sloptoot toot` — compose in `$EDITOR` (leaving the buffer empty cancels the post).
 - `sloptoot toot --reply` — reply to your most recent post (thread chaining).
 - `sloptoot toot --reply <id-or-url>` — reply to a specific status.
-- `sloptoot ls [profile|timeline|#tag]` — list your posts, your home timeline, or hashtag posts. Default output truncates to your terminal width; `-l`/`--long` prints full (wrapped) text.
+- `sloptoot ls [profile|timeline|#tag]` — list your posts, your home timeline, or hashtag posts. Default output truncates to your terminal width; `-l`/`--long` prints full (wrapped) text. In a kitty-capable terminal it also renders each poster/reblogger's avatar beside the text and any image attachments below.
 - `sloptoot ls --mobile` — serve the last listing from the local cache instead of hitting the network.
 - `sloptoot delete <id-or-url>` — remove one of your posts (server and local cache).
 - `sloptoot view <id-or-url>` — show a detailed view of a post (author, text, date, boost/like/reply counts). Image attachments (PNG/JPEG/GIF/WebP) are rendered inline when your terminal supports the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html); elsewhere they fall back to a text-only listing. Animated GIFs/WebPs animate in place.
@@ -162,3 +162,5 @@ meson test -C build
 `sloptoot view` renders image attachments inline using the kitty graphics protocol (works in kitty, Ghostty, WezTerm, Konsole, iTerm2, and other terminals that implement it). It probes the terminal once per run; if the terminal doesn't answer (Apple Terminal, tmux without passthrough, piped output, `TERM=dumb`), it automatically falls back to the plain text attachment listing. `SLOPTOOT_FORCE_GFX=1` skips the probe so the control sequences can be captured for debugging (e.g. under `script`).
 
 The view uses a hybrid layout so the whole post fits one screen: in a wide (≥92 col) terminal with a single image, the text sits on the left and the image is pinned to the top-right (the split adapts to the image's aspect ratio so it fills the terminal height); otherwise the image is stacked under the text. Images always keep their aspect ratio, and the shell prompt lands below the whole view.
+
+`sloptoot ls` uses the same graphics support: it draws each poster/reblogger's avatar (aspect-preserved, in a gutter beside the text) and stacks image attachments under the post (capped to ~40% of the screen so a wide image doesn't eat the whole feed). Non-supporting terminals get the plain text listing.
