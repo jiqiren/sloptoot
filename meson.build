@@ -1,5 +1,5 @@
 project('sloptoot', 'c',
-  version : '1.4.1',
+  version : '1.4.2',
   default_options : [
     'c_std=c23',
     'warning_level=2',

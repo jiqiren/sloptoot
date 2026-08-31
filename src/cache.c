@@ -9,6 +9,9 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Defined below; used by the media-attachment store. */
+static void exec_bind(sqlite3 *db, const char *sql, const char *v);
+
 /* Make the parent directories of `path` exist (like config.c). */
 static void ensure_dir(const char *path) {
   char *copy = strdup(path);
@@ -59,14 +62,21 @@ bool cache_open(cache *c) {
   c->db = db;
 
   /* Schema: statuses are deduplicated by id; a many-to-many table records
-   * which timeline type surfaced each one. `meta` stores small scalars. A
-   * boost wrapper row carries the boosted (inner) status id in `reblog_of`
-   * and the booster's handle in `account`. */
+   * which timeline type surfaced each one. `status_media` holds each post's
+   * `media_attachments` (URL + `preview_url` thumbnail + caption), so a
+   * cached `ls --mobile` can render images from the local media cache without
+   * the network. `meta` stores small scalars. A boost wrapper row carries the
+   * boosted (inner) status id in `reblog_of`, the booster's handle in
+   * `account`, and the booster's avatar in `avatar`. */
   const char *schema =
       "CREATE TABLE IF NOT EXISTS statuses("
       " id TEXT PRIMARY KEY,"
       " created_at TEXT, account TEXT, content TEXT,"
       " reblog_of TEXT);"
+      "CREATE TABLE IF NOT EXISTS status_media("
+      " status_id TEXT NOT NULL, pos INTEGER NOT NULL,"
+      " mime TEXT, url TEXT, preview TEXT, description TEXT, type TEXT,"
+      " PRIMARY KEY(status_id, pos));"
       "CREATE TABLE IF NOT EXISTS timeline_statuses("
       " type TEXT NOT NULL, id TEXT NOT NULL,"
       " PRIMARY KEY(type, id));"
@@ -76,6 +86,21 @@ bool cache_open(cache *c) {
     c->db = nullptr;
     return false;
   }
+
+  /* Older databases predate the `avatar` column; migrate them on open. */
+  bool has_avatar = false;
+  sqlite3_stmt *st = nullptr;
+  if (sqlite3_prepare_v2(db, "PRAGMA table_info(statuses);", -1, &st,
+                         nullptr) == SQLITE_OK) {
+    while (sqlite3_step(st) == SQLITE_ROW) {
+      const char *name = (const char *)sqlite3_column_text(st, 1);
+      if (name != nullptr && strcmp(name, "avatar") == 0) has_avatar = true;
+    }
+  }
+  if (st != nullptr) sqlite3_finalize(st);
+  if (!has_avatar)
+    sqlite3_exec(db, "ALTER TABLE statuses ADD COLUMN avatar TEXT;", nullptr,
+                 nullptr, nullptr);
   return true;
 }
 
@@ -109,15 +134,27 @@ static const char *haccount(const cJSON *status) {
   return "";
 }
 
+/* The account's avatar URL (static when available, else the animated one). */
+static const char *havatar(const cJSON *status) {
+  const cJSON *account = cJSON_GetObjectItemCaseSensitive(status, "account");
+  if (account != nullptr && cJSON_IsObject(account)) {
+    const char *av = status_field(account, "avatar_static");
+    if (av[0] == '\0') av = status_field(account, "avatar");
+    return av;
+  }
+  return "";
+}
+
 /* Insert one status row (and note it appeared in `type`). `reblog_of` is the
  * boosted inner status id when this row is a boost wrapper, else null. */
-/* Upsert the status row itself (account/created/content/reblog_of). This is
- * shared by normal posts and inner boosted posts. */
-static void store_status_row(cache *c, const cJSON *status, const char *reblog_of) {
+/* Upsert the status row itself (account/avatar/created/content/reblog_of). This
+ * is shared by normal posts and inner boosted posts. */
+static void store_status_row(cache *c, const cJSON *status,
+                             const char *reblog_of, const char *avatar) {
   sqlite3_stmt *st = nullptr;
   const char *upsert = "INSERT OR REPLACE INTO statuses"
-                       "(id, created_at, account, content, reblog_of)"
-                       " VALUES(?1,?2,?3,?4,?5);";
+                       "(id, created_at, account, content, reblog_of, avatar)"
+                       " VALUES(?1,?2,?3,?4,?5,?6);";
   if (sqlite3_prepare_v2(c->db, upsert, -1, &st, nullptr) == SQLITE_OK) {
     sqlite3_bind_text(st, 1, status_field(status, "id"), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 2, status_field(status, "created_at"), -1,
@@ -126,9 +163,49 @@ static void store_status_row(cache *c, const cJSON *status, const char *reblog_o
     sqlite3_bind_text(st, 4, status_field(status, "content"), -1,
                       SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 5, reblog_of, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 6, avatar, -1, SQLITE_TRANSIENT);
     sqlite3_step(st);
   }
   if (st != nullptr) sqlite3_finalize(st);
+}
+
+/* Replace the media_attachments rows for one status id. */
+static void store_media(cache *c, const cJSON *status) {
+  if (c == nullptr || c->db == nullptr || status == nullptr) return;
+  const char *id = status_field(status, "id");
+  if (id[0] == '\0') return;
+  exec_bind(c->db, "DELETE FROM status_media WHERE status_id=?1;", id);
+  const cJSON *media =
+      cJSON_GetObjectItemCaseSensitive(status, "media_attachments");
+  if (media == nullptr || !cJSON_IsArray(media)) return;
+  int n = cJSON_GetArraySize(media);
+  for (int i = 0; i < n; i++) {
+    const cJSON *att = cJSON_GetArrayItem(media, i);
+    const char *mime = json_get_string(att, "mime_type");
+    const char *url = json_get_string(att, "url");
+    const char *preview = json_get_string(att, "preview_url");
+    const char *desc = json_get_string(att, "description");
+    const char *type = json_get_string(att, "type");
+    sqlite3_stmt *st = nullptr;
+    const char *ins = "INSERT OR REPLACE INTO status_media"
+                      "(status_id, pos, mime, url, preview, description, type)"
+                      " VALUES(?1,?2,?3,?4,?5,?6,?7);";
+    if (sqlite3_prepare_v2(c->db, ins, -1, &st, nullptr) == SQLITE_OK) {
+      sqlite3_bind_text(st, 1, id, -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int(st, 2, i);
+      sqlite3_bind_text(st, 3, mime != nullptr ? mime : "", -1,
+                        SQLITE_TRANSIENT);
+      sqlite3_bind_text(st, 4, url != nullptr ? url : "", -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(st, 5, preview != nullptr ? preview : "", -1,
+                        SQLITE_TRANSIENT);
+      sqlite3_bind_text(st, 6, desc != nullptr ? desc : "", -1,
+                        SQLITE_TRANSIENT);
+      sqlite3_bind_text(st, 7, type != nullptr ? type : "", -1,
+                        SQLITE_TRANSIENT);
+      sqlite3_step(st);
+    }
+    if (st != nullptr) sqlite3_finalize(st);
+  }
 }
 
 /* Record that a status appears in a timeline. */
@@ -144,10 +221,12 @@ static void write_timeline_member(cache *c, const char *id, const char *type) {
   if (st != nullptr) sqlite3_finalize(st);
 }
 
-/* Write a timeline-associated row: the status plus its membership in `type`.
- * Inner boosted posts are stored via store_status_row only. */
+/* Write a timeline-associated row: the status (with avatar + media) plus its
+ * membership in `type`. Inner boosted posts are stored via store_status_row
+ * only. */
 static void write_status(cache *c, const cJSON *status, const char *type) {
-  store_status_row(c, status, nullptr);
+  store_status_row(c, status, nullptr, havatar(status));
+  store_media(c, status);
   write_timeline_member(c, status_field(status, "id"), type);
 }
 
@@ -155,11 +234,13 @@ static void status_to_db(cache *c, const cJSON *status, const char *type) {
   const cJSON *reblog = cJSON_GetObjectItemCaseSensitive(status, "reblog");
   if (reblog != nullptr && cJSON_IsObject(reblog)) {
     /* Store the boosted (inner) post for lookup; the wrapper marks it. */
-    store_status_row(c, reblog, nullptr);
+    store_status_row(c, reblog, nullptr, havatar(reblog));
+    store_media(c, reblog);
     const char *inner_id = status_field(reblog, "id");
     if (inner_id[0] == '\0') inner_id = nullptr;
-    /* The wrapper carries its own id/account(booster)/content and reblog_of. */
-    store_status_row(c, status, inner_id);
+    /* The wrapper carries its own id/account(booster)/avatar/content and
+     * reblog_of. */
+    store_status_row(c, status, inner_id, havatar(status));
     write_timeline_member(c, status_field(status, "id"), type);
   } else {
     write_status(c, status, type);
@@ -179,12 +260,14 @@ void cache_store_status(cache *c, const cJSON *status) {
   if (c == nullptr || c->db == nullptr || status == nullptr) return;
   const cJSON *reblog = cJSON_GetObjectItemCaseSensitive(status, "reblog");
   if (reblog != nullptr && cJSON_IsObject(reblog)) {
-    store_status_row(c, reblog, nullptr);
+    store_status_row(c, reblog, nullptr, havatar(reblog));
+    store_media(c, reblog);
     const char *inner_id = status_field(reblog, "id");
     if (inner_id[0] == '\0') inner_id = nullptr;
-    store_status_row(c, status, inner_id);
+    store_status_row(c, status, inner_id, havatar(status));
   } else {
-    store_status_row(c, status, nullptr);
+    store_status_row(c, status, nullptr, havatar(status));
+    store_media(c, status);
   }
 }
 
@@ -685,6 +768,125 @@ void cache_list(const cache *c, const char *type, bool wrap) {
     }
   }
   sqlite3_finalize(st);
+}
+
+/* ---- cached-listing reconstruction (for `ls --mobile` graphics) --------- */
+
+static cJSON *account_to_json(const char *acct, const char *avatar) {
+  cJSON *a = cJSON_CreateObject();
+  if (a == nullptr) return nullptr;
+  cJSON_AddStringToObject(a, "acct", acct != nullptr ? acct : "");
+  cJSON_AddStringToObject(a, "avatar", avatar != nullptr ? avatar : "");
+  return a;
+}
+
+/* Rebuild a status's media_attachments array from the status_media table. */
+static cJSON *media_to_json(const cache *c, const char *id) {
+  cJSON *arr = cJSON_CreateArray();
+  if (arr == nullptr) return nullptr;
+  sqlite3_stmt *st = nullptr;
+  const char *q = "SELECT mime, url, preview, description, type"
+                  " FROM status_media WHERE status_id=?1 ORDER BY pos;";
+  if (sqlite3_prepare_v2(c->db, q, -1, &st, nullptr) != SQLITE_OK) return arr;
+  sqlite3_bind_text(st, 1, id, -1, SQLITE_TRANSIENT);
+  while (sqlite3_step(st) == SQLITE_ROW) {
+    const char *mime = (const char *)sqlite3_column_text(st, 0);
+    const char *url = (const char *)sqlite3_column_text(st, 1);
+    const char *preview = (const char *)sqlite3_column_text(st, 2);
+    const char *desc = (const char *)sqlite3_column_text(st, 3);
+    const char *type = (const char *)sqlite3_column_text(st, 4);
+    cJSON *att = cJSON_CreateObject();
+    if (att == nullptr) break;
+    cJSON_AddStringToObject(att, "mime_type", mime != nullptr ? mime : "");
+    cJSON_AddStringToObject(att, "url", url != nullptr ? url : "");
+    cJSON_AddStringToObject(att, "preview_url",
+                            preview != nullptr ? preview : "");
+    cJSON_AddStringToObject(att, "description", desc != nullptr ? desc : "");
+    cJSON_AddStringToObject(att, "type", type != nullptr ? type : "");
+    cJSON_AddItemToArray(arr, att);
+  }
+  sqlite3_finalize(st);
+  return arr;
+}
+
+/* A minimal status object with the fields the ls renderer reads: id,
+ * created_at, content, account (acct + avatar) and, for a boost, `reblog`
+ * (the inner post, itself carrying its media). */
+static cJSON *status_base(const char *id, const char *created,
+                          const char *content, const char *acct,
+                          const char *avatar) {
+  cJSON *o = cJSON_CreateObject();
+  if (o == nullptr) return nullptr;
+  cJSON_AddStringToObject(o, "id", id != nullptr ? id : "");
+  cJSON_AddStringToObject(o, "created_at", created != nullptr ? created : "");
+  cJSON_AddStringToObject(o, "content", content != nullptr ? content : "");
+  cJSON *account = account_to_json(acct, avatar);
+  if (account == nullptr) {
+    cJSON_Delete(o);
+    return nullptr;
+  }
+  cJSON_AddItemToObject(o, "account", account);
+  return o;
+}
+
+/* The inner (boosted) post for a boost wrapper id. */
+static cJSON *inner_to_json(const cache *c, const char *id) {
+  sqlite3_stmt *st = nullptr;
+  const char *q = "SELECT created_at, content, account, avatar"
+                  " FROM statuses WHERE id=?1;";
+  if (sqlite3_prepare_v2(c->db, q, -1, &st, nullptr) != SQLITE_OK) return nullptr;
+  sqlite3_bind_text(st, 1, id, -1, SQLITE_TRANSIENT);
+  cJSON *o = nullptr;
+  if (sqlite3_step(st) == SQLITE_ROW) {
+    const char *created = (const char *)sqlite3_column_text(st, 0);
+    const char *content = (const char *)sqlite3_column_text(st, 1);
+    const char *acct = (const char *)sqlite3_column_text(st, 2);
+    const char *avatar = (const char *)sqlite3_column_text(st, 3);
+    o = status_base(id, created, content, acct, avatar);
+    if (o != nullptr) {
+      cJSON *media = media_to_json(c, id);
+      if (media != nullptr) cJSON_AddItemToObject(o, "media_attachments", media);
+    }
+  }
+  sqlite3_finalize(st);
+  return o;
+}
+
+/* Reconstruct the cached timeline of `type` as a cJSON array of status
+ * objects (same shape `ls` renders from), so `ls --mobile` can draw the
+ * avatars and images from the local media cache. Caller frees with
+ * json_free(). Returns nullptr on no rows or OOM. */
+cJSON *cache_list_json(const cache *c, const char *type) {
+  if (c == nullptr || c->db == nullptr || type == nullptr) return nullptr;
+  cJSON *arr = cJSON_CreateArray();
+  if (arr == nullptr) return nullptr;
+  sqlite3_stmt *st = nullptr;
+  const char *q = "SELECT s.id, s.created_at, s.content, s.reblog_of,"
+                  " s.account, s.avatar"
+                  " FROM timeline_statuses t JOIN statuses s ON t.id = s.id"
+                  " WHERE t.type=?1 ORDER BY s.created_at DESC;";
+  if (sqlite3_prepare_v2(c->db, q, -1, &st, nullptr) != SQLITE_OK) return arr;
+  sqlite3_bind_text(st, 1, type, -1, SQLITE_TRANSIENT);
+  while (sqlite3_step(st) == SQLITE_ROW) {
+    const char *id = (const char *)sqlite3_column_text(st, 0);
+    const char *created = (const char *)sqlite3_column_text(st, 1);
+    const char *content = (const char *)sqlite3_column_text(st, 2);
+    const char *reblog_of = (const char *)sqlite3_column_text(st, 3);
+    const char *acct = (const char *)sqlite3_column_text(st, 4);
+    const char *avatar = (const char *)sqlite3_column_text(st, 5);
+    cJSON *o = status_base(id, created, content, acct, avatar);
+    if (o == nullptr) break;
+    if (reblog_of != nullptr && reblog_of[0] != '\0') {
+      cJSON *inner = inner_to_json(c, reblog_of);
+      if (inner != nullptr) cJSON_AddItemToObject(o, "reblog", inner);
+    } else {
+      cJSON *media = media_to_json(c, id);
+      if (media != nullptr) cJSON_AddItemToObject(o, "media_attachments", media);
+    }
+    cJSON_AddItemToArray(arr, o);
+  }
+  sqlite3_finalize(st);
+  return arr;
 }
 
 /* Run a statement with a single text bound parameter and no result rows. */

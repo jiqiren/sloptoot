@@ -24,13 +24,25 @@ static int run(void) {
 
   cJSON *arr = cJSON_CreateArray();
 
+  /* Status 1 carries an avatar URL and one image attachment, so the cached
+   * listing can render it offline. */
   cJSON *s1 = cJSON_CreateObject();
   cJSON_AddStringToObject(s1, "id", "1");
   cJSON_AddStringToObject(s1, "created_at", "2024-01-01T00:00:00.000Z");
   cJSON_AddStringToObject(s1, "content", "<p>hello &amp; goodbye</p>");
   cJSON *acct1 = cJSON_CreateObject();
   cJSON_AddStringToObject(acct1, "acct", "alice");
+  cJSON_AddStringToObject(acct1, "avatar_static", "https://cdn/a.png");
   cJSON_AddItemToObject(s1, "account", acct1);
+  cJSON *media1 = cJSON_CreateArray();
+  cJSON *att1 = cJSON_CreateObject();
+  cJSON_AddStringToObject(att1, "type", "image");
+  cJSON_AddStringToObject(att1, "mime_type", "image/png");
+  cJSON_AddStringToObject(att1, "url", "https://cdn/1.png");
+  cJSON_AddStringToObject(att1, "preview_url", "https://cdn/1_small.png");
+  cJSON_AddStringToObject(att1, "description", "a picture");
+  cJSON_AddItemToArray(media1, att1);
+  cJSON_AddItemToObject(s1, "media_attachments", media1);
   cJSON_AddItemToArray(arr, s1);
 
   cJSON *s2 = cJSON_CreateObject();
@@ -110,12 +122,58 @@ static int run(void) {
     inner_ok = (sqlite3_column_int(st, 0) == 0);
   if (st != nullptr) sqlite3_finalize(st);
 
+  /* The avatar URL and media attachments round-trip into the schema. */
+  int media_ok = 0;
+  st = nullptr;
+  const char *qm =
+      "SELECT s.avatar, m.url, m.preview, m.description"
+      " FROM statuses s JOIN status_media m ON s.id = m.status_id"
+      " WHERE s.id='1' AND m.pos=0;";
+  if (sqlite3_prepare_v2(c2.db, qm, -1, &st, nullptr) == SQLITE_OK &&
+      sqlite3_step(st) == SQLITE_ROW) {
+    const char *avatar = (const char *)sqlite3_column_text(st, 0);
+    const char *url = (const char *)sqlite3_column_text(st, 1);
+    const char *preview = (const char *)sqlite3_column_text(st, 2);
+    const char *desc = (const char *)sqlite3_column_text(st, 3);
+    if (avatar != nullptr && strcmp(avatar, "https://cdn/a.png") == 0 &&
+        url != nullptr && strcmp(url, "https://cdn/1.png") == 0 &&
+        preview != nullptr && strcmp(preview, "https://cdn/1_small.png") == 0 &&
+        desc != nullptr && strcmp(desc, "a picture") == 0)
+      media_ok = 1;
+  }
+  if (st != nullptr) sqlite3_finalize(st);
+
+  /* cache_list_json rebuilds the renderable timeline (avatar + media URLs). */
+  int json_ok = 0;
+  cJSON *rebuilt = cache_list_json(&c2, "profile");
+  if (rebuilt != nullptr && cJSON_IsArray(rebuilt)) {
+    const cJSON *first = rebuilt->child;
+    while (first != nullptr &&
+           strcmp(json_get_string(first, "id"), "1") != 0)
+      first = first->next;
+    if (first != nullptr) {
+      const cJSON *account = cJSON_GetObjectItemCaseSensitive(first, "account");
+      const char *av = account != nullptr ? json_get_string(account, "avatar")
+                                          : nullptr;
+      const cJSON *media =
+          cJSON_GetObjectItemCaseSensitive(first, "media_attachments");
+      const cJSON *att = (media != nullptr && cJSON_IsArray(media))
+                             ? media->child
+                             : nullptr;
+      const char *u = att != nullptr ? json_get_string(att, "url") : nullptr;
+      if (av != nullptr && strcmp(av, "https://cdn/a.png") == 0 && u != nullptr &&
+          strcmp(u, "https://cdn/1.png") == 0)
+        json_ok = 1;
+    }
+    json_free(rebuilt);
+  }
+
   cache_close(&c2);
 
   char cmd[256];
   snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
   (void)system(cmd);
-  return (found && boost_ok && inner_ok) ? 0 : 1;
+  return (found && boost_ok && inner_ok && media_ok && json_ok) ? 0 : 1;
 }
 
 /* Delete removes a cached status and clears the chain anchor when it matches. */

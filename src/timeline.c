@@ -112,7 +112,8 @@ static bool attachment_is_image(const cJSON *att) {
 /* Fetch and decode an image from a URL. Media and avatars are public, so no
  * auth is sent (they often live on a CDN other than the instance). Bytes come
  * from the on-disk media cache when available (keyed by URL), so repeated
- * listings reuse what was already downloaded. */
+ * listings reuse what was already downloaded; a cache miss is fetched and
+ * stored, even for --mobile. */
 static bool load_image_url(const char *url, img_image *out) {
   if (url == nullptr || url[0] == '\0') return false;
   uint8_t *data = nullptr;
@@ -195,7 +196,8 @@ static void print_line_gutter(const char *s, size_t gutter) {
 
 /* Render a timeline with the kitty graphics protocol: each post gets its
  * author's avatar (aspect-preserved) beside the text and any image attachments
- * stacked below. Only called when `kgraphics_supported()`. */
+ * stacked below. Only called when `kgraphics_supported()`.
+ */
 static void ls_render_items(const cJSON *all, bool wrap) {
   (void)wrap; /* in graphics mode the text is always wrapped to its column. */
   unsigned tcols = tl_cols();
@@ -352,6 +354,17 @@ int ls_statuses(const config *c, cache *db, const char *type, bool mobile,
 
   /* Mobile: serve from the cache only, no network. */
   if (mobile) {
+    /* In a kitty-capable terminal, render the cached listing like the online
+     * one — avatars and stacked attachments read from the local media cache,
+     * never the network. Text rows remain the fallback. */
+    if (kgraphics_supported()) {
+      cJSON *cached = cache_list_json(db, cache_type);
+      if (cached != nullptr) {
+        ls_render_items(cached, wrap);
+        json_free(cached);
+        return 0;
+      }
+    }
     cache_list(db, cache_type, wrap);
     return 0;
   }

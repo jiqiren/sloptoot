@@ -79,13 +79,13 @@ Lists posts as plain text lines (`<id>  <relative-time>  <text>` with HTML strip
 
 By default `ls` fetches enough posts (paging via `max_id`, `limit=40`) to fill the terminal height minus two rows (via terminal rows from `TIOCGWINSZ`, fallback 24), so the shell prompt isn't pushed off. Only the posts that fit are printed.
 
-**Inline images** (kitty-capable terminals only): when the terminal supports the kitty graphics protocol (`kgraphics_supported()`), `ls` renders each post's author avatar (the reblogger's for boosts) to the left of the text — a two-row-tall, aspect-preserving placement drawn behind a reserved gutter — and stacks any image `media_attachments` below the post (downloaded as the small `preview_url` thumbnail, capped at ~40% of the terminal height) so a wide feed image never monopolizes the listing (the full image is one `view` away). Text is word-wrapped to the remaining width; a `C=1` avatar placement never moves the cursor, and the listing stops once the screen is full so the prompt stays below. In a terminal without kitty support, or for `--mobile` (cached rows have no avatar/media URLs), the listing falls back to the plain text rows described above.
+**Inline images** (kitty-capable terminals only): when the terminal supports the kitty graphics protocol (`kgraphics_supported()`), `ls` renders each post's author avatar (the reblogger's for boosts) to the left of the text — a two-row-tall, aspect-preserving placement drawn behind a reserved gutter — and stacks any image `media_attachments` below the post (downloaded as the small `preview_url` thumbnail, capped at ~40% of the terminal height) so a wide feed image never monopolizes the listing (the full image is one `view` away). Text is word-wrapped to the remaining width; a `C=1` avatar placement never moves the cursor, and the listing stops once the screen is full so the prompt stays below. `--mobile` renders the same graphics layout, but the statuses come from the SQLite cache; each avatar/media image is read from the local media cache, and a cache miss is fetched (and stored) — so a fully-offline run still draws only what was previously cached. In a terminal without kitty support, or when `--mobile` images aren't cached, the affected rows fall back to the plain text rows described above.
 
 **Boosts** are shown specially: the first line shows the boost id, relative time, a 🚀 emoji, and the boosting account's handle; a second, slightly indented line (introduced by `⎣`) shows the id, relative time, and text of the originally boosted post (its `reblog`).
 - No argument or `profile` — your posts/replies: `GET /api/v1/accounts/{account_id}/statuses`.
 - `timeline` — your home timeline: `GET /api/v1/timelines/home`.
 - `#<tag>` — hashtag results: `GET /api/v1/timelines/tag/{tag}`.
-- `-m`, `--mobile` — serve from the SQLite cache instead of fetching (no network).
+- `-m`, `--mobile` — serve from the SQLite cache instead of fetching (no network). The cache stores each status's avatar URL and media attachment URLs (`status_media`), so a kitty-capable terminal renders the same graphic layout from the local media cache.
 
 All loaded statuses are stored in the SQLite cache keyed by timeline type. The most recently used type is remembered so `--mobile` serves it too.
 
@@ -136,16 +136,17 @@ The shared resolver `resolve_status_id(ref)` fetches the status and unwraps a bo
 ## SQLite cache
 - Path: `$XDG_CONFIG_HOME/sloptoot/cache.db` or `$HOME/.config/sloptoot/cache.db`.
 - Tables:
-  - `statuses(id, created_at, account, content, reblog_of)` — deduplicated statuses; a boost wrapper row carries the boosted inner id in `reblog_of` and the booster's handle in `account`. The inner boosted post is stored for lookup but is not itself a timeline entry.
+  - `statuses(id, created_at, account, content, reblog_of, avatar)` — deduplicated statuses; a boost wrapper row carries the boosted inner id in `reblog_of`, the booster's handle in `account`, and the booster's avatar URL in `avatar`. The inner boosted post is stored for lookup but is not itself a timeline entry.
+  - `status_media(status_id, pos, mime, url, preview, description, type)` — each status's `media_attachments`, so `ls --mobile` can resolve the cached image files for offline rendering.
   - `timeline_statuses(type, id)` — which timeline type surfaced each status.
   - `meta(k, v)` — scalars: `last_post_id` (thread chain anchor), `last_type` (most recently loaded timeline).
-- Contents are post metadata/ids only — never secrets.
+- Contents are post metadata/ids only (plus avatar/media *URLs*, which are public) — never secrets. An existing `cache.db` from an older version is migrated on open (the `avatar` column and `status_media` table are added).
 
 ## Media cache
 - Path: `$XDG_CACHE_HOME/sloptoot/media/` or `$HOME/.cache/sloptoot/media/`.
 - One file per URL, named by the hex SHA-256 of the URL, so a lookup is a single deterministic `open()` — O(1) keyed by URL. `media_cache_fetch(url)` consults the cache first and only downloads (public, unauthenticated media) on a miss, then persists the raw bytes for next time. Cached entries never expire; Mastodon/GoToSocial URLs are content-addressed/versioned, so a changed image gets a new URL and a new cache key.
 - Files are written atomically (temp + rename, mode 0600). Cache/disk failures are never fatal — the caller still gets a fresh download. This is only a performance cache: entries can be deleted freely (`rm -rf ~/.cache/sloptoot`).
-- What is cached: avatar images (`avatar_static`/`avatar`) and image `media_attachments`. `view` caches the full-resolution media `url`; `ls` stacked listings fetch instead the small `preview_url` thumbnail (when the instance provides one) so a feed listing doesn't download full-res files.
+- What is cached: avatar images (`avatar_static`/`avatar`) and image `media_attachments`. `view` caches the full-resolution media `url`; `ls` stacked listings fetch instead the small `preview_url` thumbnail (when the instance provides one) so a feed listing doesn't download full-res files. The same files are reused by `ls --mobile`, whose rows carry the media/avatar URLs from the SQLite cache.
 
 ## Exit codes
 - `0` success
@@ -218,7 +219,7 @@ sloptoot/
 - `./build/sloptoot toot "hello"` → post visible.
 - `./build/sloptoot toot --reply` chains to the last post (after posting one); `--reply <id|url>` replies to a specific post.
 - `./build/sloptoot toot` with `EDITOR` set → editor opens, text posts; untouched buffer cancels with exit 0.
-- `./build/sloptoot ls`, `ls timeline`, `ls #tag` fetch and print (`-l`/`--long` wraps instead of truncating to the terminal width); `ls --mobile` serves cached rows without network. In a kitty-capable terminal, `ls` renders the poster/reblogger avatar beside each row and image attachments below (aspect-preserved, capped to ~40% of the screen); in a non-supporting terminal or piped output it prints the plain text rows.
+- `./build/sloptoot ls`, `ls timeline`, `ls #tag` fetch and print (`-l`/`--long` wraps instead of truncating to the terminal width); `ls --mobile`, `ls --mobile timeline`, `ls --mobile '#tag'` serve the cached rows without network. In a kitty-capable terminal, `ls` renders the poster/reblogger avatar beside each row and image attachments below (aspect-preserved, capped to ~40% of the screen); `--mobile` renders the same layout from the local media cache (fetching any media not yet cached); in a non-supporting terminal or piped output it prints the plain text rows.
 - `./build/sloptoot delete <id-or-url>` removes a post from the server and cache.
 - `./build/sloptoot view <id-with-image>` in a kitty/ghostty/wezterm terminal renders PNG/JPEG/GIF/WebP attachments with the hybrid layout: side-by-side (text left / image right) in a ≥92-col terminal with a single image, otherwise stacked. In a non-supporting terminal or piped output it prints the plain `<type>`/alt-text listing instead. Animated GIFs/WebPs animate. `SLOPTOOT_FORCE_GFX=1 script -q log sh -c "./build/sloptoot view <id>"` captures the emitted APC sequences (`a=t`, `a=f`, `a=a`, `a=p`) for inspection.
 - Force OOB fallback (loopback bind failure); confirm paste flow works.

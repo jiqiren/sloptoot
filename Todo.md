@@ -1,6 +1,6 @@
 # Todo — sloptoot
 
-Current version: 1.4.0 (released; renamed from cli-toot).
+Current version: 1.4.2 (release; media cache + offline `ls --mobile` graphics).
 
 ## Completed
 - [x] Project scaffolding (meson.build, cjson.wrap, libcurl, cJSON, platform sha256, stub main.c)

@@ -36,6 +36,13 @@ void cache_store_status(cache *c, const cJSON *status);
  * terminal width. */
 void cache_list(const cache *c, const char *type, bool wrap);
 
+/* Reconstruct the cached timeline of `type` as a cJSON array of status
+ * objects (same shape `ls` renders from), including each account's avatar URL
+ * and the media_attachments URLs, so `ls --mobile` can draw avatars/images
+ * from the local media cache. Caller frees with json_free(). Returns nullptr
+ * on no rows or OOM. */
+[[nodiscard]] cJSON *cache_list_json(const cache *c, const char *type);
+
 /* Print a cJSON array of statuses (newest-first). Boost wrappers render with
  * their inner post on an indented line. */
 void cache_list_items(const cache *c, const cJSON *arr, bool wrap);

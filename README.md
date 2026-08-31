@@ -18,7 +18,7 @@ Then run `sloptoot login <instance>` to get started.
 - `sloptoot toot --reply` — reply to your most recent post (thread chaining).
 - `sloptoot toot --reply <id-or-url>` — reply to a specific status.
 - `sloptoot ls [profile|timeline|#tag]` — list your posts, your home timeline, or hashtag posts. Default output truncates to your terminal width; `-l`/`--long` prints full (wrapped) text. In a kitty-capable terminal it also renders each poster/reblogger's avatar beside the text and any image attachments below.
-- `sloptoot ls --mobile` — serve the last listing from the local cache instead of hitting the network.
+- `sloptoot ls --mobile` — serve the last listing from the local cache instead of hitting the network. In a kitty-capable terminal it still draws avatars and image thumbnails, read from the cached media files.
 - `sloptoot delete <id-or-url>` — remove one of your posts (server and local cache).
 - `sloptoot view <id-or-url>` — show a detailed view of a post (author, text, date, boost/like/reply counts). Image attachments (PNG/JPEG/GIF/WebP) are rendered inline when your terminal supports the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html); elsewhere they fall back to a text-only listing. Animated GIFs/WebPs animate in place.
 - `sloptoot boost <id-or-url>` — boost (reblog) a post.
@@ -96,7 +96,7 @@ Credentials live at `$XDG_CONFIG_HOME/sloptoot/config` (or `~/.config/sloptoot/c
 
 Fetched listings live in a SQLite database at `$XDG_CONFIG_HOME/sloptoot/cache.db` (or `~/.config/sloptoot/cache.db`). It holds post metadata only (never credentials) and remembers your last post so `toot --reply` can chain threads.
 
-Avatars, profile pictures, and image attachments are cached as files under `$XDG_CACHE_HOME/sloptoot/media/` (or `~/.cache/sloptoot/media/`), one file per URL named by the URL's SHA-256 hash — repeat `view`/`ls` runs reuse what was already downloaded instead of re-fetching. `view` caches the full-resolution image; `ls` uses the small thumbnail (`preview_url`) for stacked listings. This is a pure performance cache: you can `rm -rf ~/.cache/sloptoot` any time without breaking anything.
+Avatars, profile pictures, and image attachments are cached as files under `$XDG_CACHE_HOME/sloptoot/media/` (or `~/.cache/sloptoot/media/`), one file per URL named by the URL's SHA-256 hash — repeat `view`/`ls` runs reuse what was already downloaded instead of re-fetching. `view` caches the full-resolution image; `ls` uses the small thumbnail (`preview_url`) for stacked listings. `ls --mobile` draws avatars/thumbnails from these cached files (the SQLite cache stores each post's avatar and media URLs); a not-yet-cached image is fetched and stored for next time, so only fully-cached runs are offline. This is a pure performance cache: you can `rm -rf ~/.cache/sloptoot` any time without breaking anything.
 
 ## Exit codes
 
