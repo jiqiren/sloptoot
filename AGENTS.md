@@ -12,6 +12,12 @@ sloptoot: a minimal C23 CLI Mastodon client. See `Spec.md` for the full specific
 - **libcurl**: hard system dependency, linked via pkg-config. Always use it for HTTP — do not hand-roll sockets for API calls.
 - **cJSON**: via Meson subproject wrap (`subprojects/cjson.wrap`). **Do not vendor** cJSON source. Access via `dependency('libcjson', fallback : ['cjson', 'libcjson_dep'])` — this prefers a system-installed cjson (pkg-config) and falls back to the subproject only when not found. Pass `--wrap-mode=nofallback` to force system cjson (used by the Homebrew formula).
 - **SQLite**: used for the status cache (`src/cache.c`). Link `dependency('sqlite3')` via pkg-config — the Homebrew `sqlite` keg ships `sqlite3.pc`; Linux distros ship `libsqlite3-dev`. Never store `access_token`/`client_secret` in the DB.
+- **Image decoding** (`src/image.c`, `src/kitty.c`): inline attachment viewing. All via pkg-config; do not vendor or hand-roll codecs:
+  - libpng (`dependency('libpng')`) — PNG decode and PNG re-encode. The kitty graphics protocol accepts PNG or raw RGBA only, so all frames are sent as PNG.
+  - libjpeg-turbo (`dependency('libjpeg')` — the `libjpeg` pkg-config name) — JPEG decode via the classic libjpeg API with `JCS_EXT_RGBA`; the shared lib is `-ljpeg`.
+  - libnsgif (`dependency('libnsgif')`) — GIF decode incl. animation frames/delays.
+  - libwebp + libwebpdemux (`dependency('libwebp')`, `dependency('libwebpdemux')`) — WebP decode; `WebPDemux`/`WebPAnimDecoder` for animated WebP.
+  - The terminal rendering module (`src/kitty.c`) implements the kitty graphics protocol: capability probe (`a=q,i=<id>,t=d`), chunked base64 transmit (`a=t`, ≤4096-byte chunks), rectangle placement (`a=p,i=<id>,c=<cols>,r=<rows>` with `C=1` to hold the cursor), and animation (`a=f` frames with `z=` gap, `a=a,s=3` start). Placement escapes must never be emitted when the terminal is unsupported (`kgraphics_supported()` false) or stdout is not a tty. `SLOPTOOT_FORCE_GFX=1` skips the probe for capture/debugging. `view` uses a hybrid layout: side-by-side (text left / image right) when the terminal is ≥92 columns wide and there is exactly one decoded image, otherwise images are stacked below the text. The split is adaptive — the image fills the terminal height at its native aspect (cell size via `CSI 16 t`/`CSI 14 t`), the text takes ≥40 columns — and every placement rectangle is computed from pixel dimensions + cell size so aspect ratio is never distorted (the kitty protocol stretches to exactly `c`×`r`). After a `C=1` placement the cursor is parked below the taller of text/image so the shell prompt doesn't overwrite the text.
 - **SHA-256**: per-platform shim only.
   - macOS: CommonCrypto (`CC_SHA256`).
   - Linux: libcrypto (`SHA256()`, `dependency('libcrypto')`).
@@ -65,11 +71,11 @@ To run tests: `meson test -C build`.
 ## Distribution (Homebrew)
 - The tap lives at `jiqiren/homebrew-tap` (https://github.com/jiqiren/homebrew-tap).
 - Users install with `brew install jiqiren/tap/sloptoot`.
-- The formula (`Formula/sloptoot.rb`) builds from the tagged release tarball, depends on `cjson` (system), and passes `--wrap-mode=nofallback` to `meson setup`.
+- The formula (`Formula/sloptoot.rb`) builds from the tagged release tarball, depends on `cjson` (system), `libpng`, `jpeg-turbo`, `libnsgif`, and `webp` (which pulls in `giflib`/`libjpeg-turbo`/`libpng` on its own), and passes `--wrap-mode=nofallback` to `meson setup`.
 - When releasing a new version: bump `meson.build` version, commit, tag `v<version>`, push the tag, create a GitHub release, compute the tarball SHA-256, and update the formula's `url`/`sha256`/`version` in the tap.
 
 ## Things to NOT do
 - Do not add streaming/notification features or media uploads — out of scope.
 - Do not introduce a second TLS library.
-- Do not vendor JSON or crypto libs.
+- Do not vendor JSON, crypto, or image-codec libraries, and do not hand-roll image decoders.
 - Do not leave commented-out code or noise in source files.

@@ -13,6 +13,12 @@ cjson_dep = dependency('libcjson', fallback : ['cjson', 'libcjson_dep'])
 
 sqlite_dep = dependency('sqlite3', required : true)
 
+png_dep = dependency('libpng', required : true)
+jpeg_dep = dependency('libjpeg', required : true)
+nsgif_dep = dependency('libnsgif', required : true)
+webp_dep = dependency('libwebp', required : true)
+webpdemux_dep = dependency('libwebpdemux', required : true)
+
 common_args = []
 if host_machine.system() != 'darwin'
   common_args += ['-D_GNU_SOURCE']
@@ -26,7 +32,8 @@ version_h = configure_file(
   configuration : conf_data,
 )
 
-deps = [curl_dep, cjson_dep, sqlite_dep]
+deps = [curl_dep, cjson_dep, sqlite_dep, png_dep, jpeg_dep, nsgif_dep,
+        webp_dep, webpdemux_dep]
 src = files(
   'src/main.c',
   'src/base64.c',
@@ -41,6 +48,8 @@ src = files(
   'src/timeline.c',
   'src/edit.c',
   'src/view.c',
+  'src/image.c',
+  'src/kitty.c',
 )
 
 if host_machine.system() == 'darwin'
@@ -84,5 +93,12 @@ test('cache', executable('cache_test', 'tests/cache_test.c',
   'src/json_helpers.c',
   include_directories : 'src',
   dependencies : [cjson_dep, sqlite_dep],
+  c_args : common_args,
+))
+
+test('image', executable('image_test', 'tests/image_test.c',
+  'src/image.c',
+  include_directories : ['src', 'tests'],
+  dependencies : [png_dep, jpeg_dep, nsgif_dep, webp_dep, webpdemux_dep],
   c_args : common_args,
 ))

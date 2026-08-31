@@ -47,6 +47,16 @@ int cache_terminal_rows(void);
  * `out` (plain text for terminal display). */
 void cache_plain_text(const char *src, char *out, size_t cap);
 
+/* Word-wrap `text` to at most `cols` display columns (wide/emoji-aware),
+ * inserting '\n' at word boundaries. `out` receives the wrapped text
+ * (NUL-terminated; safe to call with cap 0). Returns the number of display
+ * lines the wrapped text occupies. */
+size_t cache_wrap(const char *text, size_t cols, char *out, size_t cap);
+
+/* Fill `out` with `s` truncated to `cols` display columns without splitting a
+ * multibyte sequence (appends an ellipsis when cut). Returns columns used. */
+size_t cache_truncate(const char *s, size_t cols, char *out, size_t cap);
+
 /* Format an ISO-8601 status timestamp as a relative time ("5m", "3h", ...). */
 void cache_relative_time(const char *iso, char *out, size_t cap);
 

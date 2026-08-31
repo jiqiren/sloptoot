@@ -19,6 +19,11 @@ A minimal command-line Mastodon client for sending quick toots, written in pure 
 - **HTTP/TLS:** libcurl — hard system dependency, linked via pkg-config.
 - **JSON:** cJSON via a Meson subproject wrap (`subprojects/cjson.wrap`). Not vendored. At build time, `dependency('libcjson', fallback : ['cjson', 'libcjson_dep'])` tries the system-installed cjson first (via pkg-config), falling back to the subproject only when not found. This lets Homebrew use its brewed `cjson` formula (`--wrap-mode=nofallback`) while local dev builds auto-fetch the wrap.
 - **SQLite (cache):** system `sqlite3` via pkg-config (`dependency('sqlite3')`). On macOS the Homebrew `sqlite` formula (keg-only) provides the header, library, and `.pc`; on Linux the distro `sqlite3` provides them. Not vendored.
+- **Image decoding (inline attachment viewing):** pkg-config deps, not vendored:
+  - libpng (`dependency('libpng')`) — PNG decode, and PNG re-encode of decoded frames. The kitty protocol accepts only PNG or raw RGBA, so every format is decoded to RGBA and re-sent as PNG.
+  - libjpeg-turbo (`dependency('libjpeg')`) — JPEG decode through the classic libjpeg API (`JCS_EXT_RGBA` output).
+  - libnsgif (`dependency('libnsgif')`) — GIF decode including animations (frame delays + loop count).
+  - libwebp / libwebpdemux (`dependency('libwebp')`, `dependency('libwebpdemux')`) — WebP decode; `WebPDemux`/`WebPAnimDecoder` for animated WebP.
 - **SHA-256 (PKCE):** per-platform shim, no vendored crypto:
   - macOS: CommonCrypto `<CommonCrypto/CommonDigest.h>` (`CC_SHA256`). System framework, no link flag.
   - Linux: `<openssl/sha.h>` (`SHA256()`), linked against `-lcrypto` via pkg-config (`dependency('libcrypto')`).
@@ -34,7 +39,7 @@ A minimal command-line Mastodon client for sending quick toots, written in pure 
 - **Homebrew tap:** `jiqiren/homebrew-tap` (https://github.com/jiqiren/homebrew-tap).
 - Install with `brew install jiqiren/tap/sloptoot`.
 - The formula builds from a tagged GitHub release archive (`https://github.com/jiqiren/sloptoot/archive/refs/tags/v<version>.tar.gz`), verified with SHA-256.
-- Formula dependencies: `meson`, `ninja`, `pkgconf` (build); `curl`, `cjson` (runtime); `openssl@3` (runtime, Linux only).
+- Formula dependencies: `meson`, `ninja`, `pkgconf` (build); `curl`, `cjson`, `libpng`, `jpeg-turbo`, `libnsgif`, `webp` (runtime); `openssl@3` (runtime, Linux only).
 - The formula passes `meson setup` with `--wrap-mode=nofallback` so the system `cjson` is used instead of building the subproject.
 
 ## Commands
@@ -101,6 +106,18 @@ Print usage.
 
 **When the id is a boost**, the view shows the boost line first (`🚀 @<booster> boosted`, when it was boosted), then the detailed view of the *underlying* post from its `reblog`.
 
+**Image attachments** are rendered inline via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) when the terminal supports it:
+1. Graphics support is probed once per run with a query action (`a=q,i=31,t=d`) — a non-replying terminal (Apple Terminal, tmux without passthrough, `TERM=dumb`, piped stdout/stdin) silently disables rendering.
+2. Each attachment with an image MIME type (`mime_type` field, falling back to the URL extension for `.png`/`.jpg`/`.jpeg`/`.gif`/`.webp`) is fetched (no auth — media often lives on a CDN), decoded to RGBA frames (`src/image.c`), and re-encoded as PNG.
+3. **Hybrid layout** keeps the whole post on screen:
+   - In a terminal ≥92 columns with exactly one decoded image, the text/metadata pane sits on the left and the image is pinned to the top-right (CUP to the split column, then `a=p,i=<id>,c=<cols>,r=<rows>,C=1` so the cursor doesn't move). The split is **adaptive**: the image is sized to fill the terminal height at its native aspect ratio (character cell size via `CSI 16 t`, falling back to `CSI 14 t`, then 8×16), with the text taking what remains (≥40 columns); a fixed split left wide terminals underused for wide images.
+   - Otherwise (narrow terminal, no/tall/multiple images) the image(s) are stacked below the text, each `a=p,i=<id>,c=<cols>,r=<rows>` at the current cursor; the leftover rows are split among images by aspect ratio, and each image keeps its aspect ratio.
+   - The current cursor is parked **below the taller of the text and the image** after the side-by-side placement so the shell prompt appears under the whole view instead of overwriting the left-column text.
+   - Placement rectangles are always computed from the image's pixel dimensions and the cell size so **aspect ratio is preserved** — the kitty protocol distorts the image if `c`/`r` don't match its cell aspect.
+4. Transmit is chunked base64 (`a=t`, ≤4096-byte chunks); animated GIFs/WebPs transmit the extra frames with `a=f,i=<id>,z=<gap-ms>` and start with `a=a,i=<id>,s=3,v=<loops>` (infinite loop when the file says "loop forever").
+
+If rendering is impossible (unsupported format, decode failure, network error on the media URL, or unsupported terminal), that attachment falls back to a plain `<type>` / alt-text line. `SLOPTOOT_FORCE_GFX=1` skips the capability probe (for capturing/debugging the emitted escapes, e.g. under `script`); the tty checks still apply.
+
 - `-m`, `--mobile` — if the post is already in the local cache, print the cached copy (handle, text, posted time, id; no network). A post not in the cache is fetched normally, and the fetched status (and its boosted inner, for boosts) is stored in the cache so later `--mobile` views are fully offline. If the cache cannot be opened the command proceeds with a plain online view.
 
 ### `sloptoot boost|like|bookmark <id-or-url>`
@@ -150,12 +167,17 @@ sloptoot/
 │   ├── timeline.h / timeline.c (ls: profile/home/#tag)
 │   ├── cache.h / cache.c     (SQLite status cache)
 │   ├── edit.h / edit.c       ($EDITOR compose flow)
-│   └── view.h / view.c       (view: detailed single-status view)
+│   ├── view.h / view.c       (view: detailed single-status view; inline image attachments)
+│   ├── image.h / image.c     (decode JPEG/PNG/GIF/WebP -> RGBA frames; encode RGBA -> PNG)
+│   ├── kitty.h / kitty.c     (kitty graphics protocol: probe, transmit, rectangle placement, animation)
 ├── tests/
 │   ├── crypto_test.c
 │   ├── config_test.c
 │   ├── loopback_test.c
-│   └── cache_test.c
+│   ├── cache_test.c
+│   ├── image_test.c          (decode/round-trip checks against real fixtures)
+│   ├── image_fixtures.h      (generated base64 of the sample PNG/JPEG/GIF/WebP images)
+│   └── fixtures/             (sample source images used to build image_fixtures.h)
 ├── Spec.md
 ├── AGENTS.md
 ├── README.md
@@ -163,24 +185,25 @@ sloptoot/
 ```
 
 ## Build dependencies
-- macOS: `brew install meson pkg-config curl sqlite` (cJSON auto-fetched via wrap, or use `brew install cjson` to use the system one).
-- Linux: install `meson`, `pkg-config`, `libcurl4-openssl-dev` (or distro equivalent), `libssl-dev` (provides `libcrypto`), `libsqlite3-dev`.
+- macOS: `brew install meson pkg-config curl sqlite libpng jpeg-turbo libnsgif webp` (cJSON auto-fetched via wrap, or use `brew install cjson` to use the system one).
+- Linux: install `meson`, `pkg-config`, `libcurl4-openssl-dev` (or distro equivalent), `libssl-dev` (provides `libcrypto`), `libsqlite3-dev`, `libpng-dev`, `libjpeg-turbo8-dev`, `libnsgif-dev`, `libwebp-dev` (or the distro equivalents).
 
 ## Meson build essentials
 - `project('sloptoot','c',version:'<version>',default_options:['c_std=c23','warning_level=2','werror=true'])`.
 - `dependency('libcurl')` via pkg-config.
 - `dependency('libcjson', fallback : ['cjson', 'libcjson_dep'])` — uses system cjson if available, else builds the subproject.
 - `dependency('sqlite3')` via pkg-config (Homebrew keg `sqlite` provides a `.pc`).
+- Image deps via pkg-config: `dependency('libpng')`, `dependency('libjpeg')`, `dependency('libnsgif')`, `dependency('libwebp')`, `dependency('libwebpdemux')`.
 - `configure_file(input : 'src/version.h.in', output : 'version.h', configuration : ...)` injects the project version.
 - `_GNU_SOURCE` added to `c_args` on non-darwin for POSIX function visibility.
 - Linux only: `dependency('libcrypto')`.
 - Per-platform source selection: `sha256_apple.c` on `'darwin'`, else `sha256_posix.c`.
 - `executable('sloptoot', ..., install : true)` — `meson install` places the binary in the prefix `bin/`.
-- Tests: `crypto_test`, `config_test`, `loopback_test`, `cache_test` (run via `meson test`).
+- Tests: `crypto_test`, `config_test`, `loopback_test`, `cache_test`, `image_test` (run via `meson test`).
 
 ## Verification
 - `meson setup build && meson compile -C build` clean under `-Werror c_std=c23`.
-- `meson test -C build` — all tests pass (crypto NIST vector + verifier length, config round-trip + 0600 mode, loopback end-to-end, cache store/list + chain anchor).
+- `meson test -C build` — all tests pass (crypto NIST vector + verifier length, config round-trip + 0600 mode, loopback end-to-end, cache store/list + chain anchor, image decode fixtures for PNG/JPEG/GIF/WebP + PNG round trip).
 - `./build/sloptoot version` prints `sloptoot <version>`.
 - `./build/sloptoot login <instance>` → browser opens, token stored, `whoami` works. Tested with Mastodon and GoToSocial.
 - `./build/sloptoot toot "hello"` → post visible.
@@ -188,6 +211,7 @@ sloptoot/
 - `./build/sloptoot toot` with `EDITOR` set → editor opens, text posts; untouched buffer cancels with exit 0.
 - `./build/sloptoot ls`, `ls timeline`, `ls #tag` fetch and print (`-l`/`--long` wraps instead of truncating to the terminal width); `ls --mobile` serves cached rows without network.
 - `./build/sloptoot delete <id-or-url>` removes a post from the server and cache.
+- `./build/sloptoot view <id-with-image>` in a kitty/ghostty/wezterm terminal renders PNG/JPEG/GIF/WebP attachments with the hybrid layout: side-by-side (text left / image right) in a ≥92-col terminal with a single image, otherwise stacked. In a non-supporting terminal or piped output it prints the plain `<type>`/alt-text listing instead. Animated GIFs/WebPs animate. `SLOPTOOT_FORCE_GFX=1 script -q log sh -c "./build/sloptoot view <id>"` captures the emitted APC sequences (`a=t`, `a=f`, `a=a`, `a=p`) for inspection.
 - Force OOB fallback (loopback bind failure); confirm paste flow works.
 - Smoke test on Linux: `xdg-open`, `/dev/urandom`, libcrypto link, `_GNU_SOURCE` visibility.
 - Homebrew formula: `brew install jiqiren/tap/sloptoot` builds and installs; `brew test` and `brew audit --new --formula` pass.

@@ -162,4 +162,58 @@ static int run_delete(void) {
   return ok ? 0 : 1;
 }
 
-int main(void) { return run() || run_delete(); }
+/* Text-wrap / truncate helpers used for the hybrid image layout. */
+static int run_wrap(void) {
+  char out[1024];
+
+  /* Basic word wrap at a narrow width. */
+  size_t n = cache_wrap("aaa bbb ccc ddd", 8, out, sizeof(out));
+  if (n != 2) {
+    fprintf(stderr, "wrap: expected 2 lines, got %zu: [%s]\n", n, out);
+    return 1;
+  }
+  if (strcmp(out, "aaa bbb\nccc ddd") != 0) {
+    fprintf(stderr, "wrap: bad output [%s]\n", out);
+    return 1;
+  }
+  /* A wider word triggers a break. */
+  n = cache_wrap("aa bb cccccc", 7, out, sizeof(out));
+  if (n != 2 || strcmp(out, "aa bb\ncccccc") != 0) {
+    fprintf(stderr, "wrap: wide-word break [%s]\n", out);
+    return 1;
+  }
+
+  /* Line breaks in the source are preserved. */
+  n = cache_wrap("one\ntwo", 80, out, sizeof(out));
+  if (n != 2 || strcmp(out, "one\ntwo") != 0) {
+    fprintf(stderr, "wrap: newline handling [%s]\n", out);
+    return 1;
+  }
+
+  /* A single long word is not split but still counts as one line. */
+  n = cache_wrap("supercalifragilistic", 4, out, sizeof(out));
+  if (n != 1) {
+    fprintf(stderr, "wrap: long word [%s]\n", out);
+    return 1;
+  }
+
+  /* Truncation never splits a multibyte char and appends an ellipsis. */
+  cache_truncate("ab\xEF\x80\x80 def", 80, out, sizeof(out));
+  if (strcmp(out, "ab\xEF\x80\x80 def") != 0) {
+    fprintf(stderr, "truncate: multibyte corruption [%s]\n", out);
+    return 1;
+  }
+  cache_truncate("hello world", 6, out, sizeof(out));
+  if (strcmp(out, "hell\xE2\x80\xA6") != 0) {
+    fprintf(stderr, "truncate: bad cut [%s]\n", out);
+    return 1;
+  }
+  cache_truncate("short", 80, out, sizeof(out));
+  if (strcmp(out, "short") != 0) {
+    fprintf(stderr, "truncate: long lines must be untouched [%s]\n", out);
+    return 1;
+  }
+  return 0;
+}
+
+int main(void) { return run() || run_delete() || run_wrap(); }

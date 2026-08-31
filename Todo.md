@@ -38,8 +38,11 @@ Current version: 1.2.0 (released; renamed from cli-toot).
 - [x] `view` of a boost shows the boost line (booster, when) then the underlying post's detail
 - [x] Status actions and replies on a boost id unwrap to the underlying `reblog` post (`resolve_status_id`)
 - [x] Status refs accept Mastodon numeric snowflakes and GoToSocial ULIDs (and URLs)
+- [x] Inline image viewing in `view` via the kitty graphics protocol (PNG/JPEG/GIF/WebP, animated GIFs/WebPs, terminal probe + graceful text fallback, `SLOPTOOT_FORCE_GFX=1`) — deterministic check via `SLOPTOOT_FORCE_GFX=1 script q log · …` captures the `a=t`/`a=f`/`a=a`/`a=p` sequences.
+- [x] Hybrid `view` layout to maximize the terminal: side-by-side (text left / image pinned top-right, adaptive split) in ≥92-col terminals with a single image, otherwise images stacked under the text; text pane is display-width word-wrapped, stacked images share the leftover rows by aspect ratio, and every placement preserves the image's aspect ratio (cell-size-aware). After the side placement the cursor is parked below the taller column so the prompt doesn't overwrite the text.
 
 ## Backlog (out of scope for v1)
 - [ ] Media uploads / attachments (`-i/--include`) — deferred (ALT-text concerns)
+- [ ] Image rendering in `ls` (timeline thumbnails) — deferred until persistence/reflow concerns are settled
 - [ ] Streaming / notifications
 - [ ] Multiple accounts

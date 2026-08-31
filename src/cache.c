@@ -378,6 +378,79 @@ static size_t truncate_to_cols(const char *s, size_t cols, char *out,
   return col;
 }
 
+size_t cache_truncate(const char *s, size_t cols, char *out, size_t cap) {
+  return truncate_to_cols(s, cols, out, cap);
+}
+
+/* Wrap `text` to at most `cols` display columns without splitting words. */
+size_t cache_wrap(const char *text, size_t cols, char *out, size_t cap) {
+  if (text == nullptr || out == nullptr || cap == 0 || cols == 0) return 0;
+
+  size_t o = 0;  /* output cursor */
+  size_t wl = 0; /* display width of the line so far */
+  size_t lines = 1;
+  bool any = false;
+
+  const char *ws = nullptr; /* start of pending word, or null */
+  size_t ww = 0;            /* display width of pending word */
+
+  size_t i = 0;
+  while (text[i] != '\0') {
+    size_t n;
+    unsigned long cp = utf8_decode(text + i, &n);
+    if (cp == ' ' || cp == '\t' || cp == '\n') {
+      if (ws != nullptr) { /* commit the pending word */
+        size_t wb = (size_t)(text + i - ws);
+        if (wl > 0) {
+          if (wl + 1 + ww > cols) {
+            if (o < cap) out[o++] = '\n';
+            wl = 0;
+            lines++;
+          } else {
+            if (o < cap) out[o++] = ' ';
+            wl++;
+          }
+        }
+        for (size_t k = 0; k < wb && o < cap; k++) out[o++] = ws[k];
+        wl += ww;
+        any = true;
+        ws = nullptr;
+        ww = 0;
+      }
+      if (cp == '\n') {
+        if (o < cap) out[o++] = '\n';
+        wl = 0;
+        lines++;
+      }
+      i += n;
+      continue;
+    }
+    if (ws == nullptr) ws = text + i;
+    ww += (size_t)char_disp_width(cp);
+    i += n;
+  }
+
+  /* Trailing word. */
+  if (ws != nullptr) {
+    size_t wb = (size_t)(text + i - ws);
+    if (wl > 0) {
+      if (wl + 1 + ww > cols) {
+        if (o < cap) out[o++] = '\n';
+        wl = 0;
+        lines++;
+      } else {
+        if (o < cap) out[o++] = ' ';
+        wl++;
+      }
+    }
+    for (size_t k = 0; k < wb && o < cap; k++) out[o++] = ws[k];
+    any = true;
+  }
+
+  if (!any) return 0;
+  out[o] = '\0';
+  return lines;
+}
 /* Parse a Mastodon ISO-8601 timestamp ("2026-08-19T09:30:00.000Z") as UTC and
  * return it as a Unix epoch. On parse failure, returns 0. */
 static long parse_iso8601(const char *s) {

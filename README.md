@@ -20,7 +20,7 @@ Then run `sloptoot login <instance>` to get started.
 - `sloptoot ls [profile|timeline|#tag]` — list your posts, your home timeline, or hashtag posts. Default output truncates to your terminal width; `-l`/`--long` prints full (wrapped) text.
 - `sloptoot ls --mobile` — serve the last listing from the local cache instead of hitting the network.
 - `sloptoot delete <id-or-url>` — remove one of your posts (server and local cache).
-- `sloptoot view <id-or-url>` — show a detailed view of a post (author, text, date, boost/like/reply counts).
+- `sloptoot view <id-or-url>` — show a detailed view of a post (author, text, date, boost/like/reply counts). Image attachments (PNG/JPEG/GIF/WebP) are rendered inline when your terminal supports the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html); elsewhere they fall back to a text-only listing. Animated GIFs/WebPs animate in place.
 - `sloptoot boost <id-or-url>` — boost (reblog) a post.
 - `sloptoot like <id-or-url>` — favourite a post.
 - `sloptoot bookmark <id-or-url>` — bookmark a post.
@@ -69,19 +69,20 @@ Set `SLOPTOOT_DEBUG=1` to have the loopback server print the raw callback reques
 
 ## Build from source
 
-Requires Meson, pkg-config, libcurl, SQLite (`sqlite3`), and (on Linux) libcrypto/openssl dev headers. cJSON is fetched automatically via a Meson subproject wrap (or use a system-installed `cjson`).
+Requires Meson, pkg-config, libcurl, SQLite (`sqlite3`), and the image libraries `libpng`, `jpeg-turbo`, `libnsgif`, and `webp` (+ `webpdemux`), plus (on Linux) libcrypto/openssl dev headers. cJSON is fetched automatically via a Meson subproject wrap (or use a system-installed `cjson`).
 
 ### macOS (Homebrew)
 
 ```sh
-brew install meson pkg-config curl sqlite
+brew install meson pkg-config curl sqlite libpng jpeg-turbo libnsgif webp
 meson setup build && meson compile -C build
 ```
 
 ### Linux (Debian/Ubuntu)
 
 ```sh
-sudo apt install meson pkg-config libcurl4-openssl-dev libssl-dev libsqlite3-dev
+sudo apt install meson pkg-config libcurl4-openssl-dev libssl-dev libsqlite3-dev \
+  libpng-dev libjpeg-turbo8-dev libnsgif-dev libwebp-dev
 meson setup build && meson compile -C build
 ```
 
@@ -117,6 +118,8 @@ sloptoot/
 │   ├── cache.{c,h}       SQLite status cache
 │   ├── edit.{c,h}        $EDITOR compose flow
 │   ├── view.{c,h}        view command (detailed single-status view)
+│   ├── image.{c,h}       image decode (JPEG/PNG/GIF/WebP -> RGBA) + PNG encode
+│   ├── kitty.{c,h}       kitty graphics protocol (transmit/place/animate)
 │   ├── http.{c,h}        libcurl helpers (form/json/get, urlencode)
 │   ├── loopback.{c,h}    127.0.0.1 callback server
 │   ├── config.{c,h}      XDG config load/save (0600)
@@ -128,7 +131,8 @@ sloptoot/
 │   ├── crypto_test.c
 │   ├── config_test.c
 │   ├── loopback_test.c
-│   └── cache_test.c
+│   ├── cache_test.c
+│   └── image_test.c     decodes real PNG/JPEG/GIF/WebP fixtures
 ├── Spec.md
 ├── AGENTS.md
 ├── README.md
@@ -146,5 +150,15 @@ meson test -C build
 - [libcurl](https://curl.se/) — HTTP/TLS, via pkg-config.
 - [cJSON](https://github.com/DaveGamble/cJSON) — JSON, via Meson wrap (auto-fetched) or system `cjson` formula.
 - [SQLite](https://www.sqlite.org/) — status cache, via `dependency('sqlite3')` (Homebrew `sqlite` keg on macOS).
+- [libpng](http://www.libpng.org/) — PNG decode + re-encode (RGBA), via `dependency('libpng')`.
+- [libjpeg-turbo](https://libjpeg-turbo.org/) — JPEG decode, via `dependency('libjpeg')`.
+- [libnsgif](https://www.netsurf-browser.org/projects/libnsgif/) — animated GIF decode, via `dependency('libnsgif')`.
+- [libwebp](https://developers.google.com/speed/webp/) — WebP decode + WebPDemux animation, via `dependency('libwebp')`/`dependency('libwebpdemux')`.
 - SHA-256: CommonCrypto on macOS, libcrypto (`SHA256()`) on Linux. No vendored crypto.
 - Random bytes: `/dev/urandom`.
+
+## Viewing images
+
+`sloptoot view` renders image attachments inline using the kitty graphics protocol (works in kitty, Ghostty, WezTerm, Konsole, iTerm2, and other terminals that implement it). It probes the terminal once per run; if the terminal doesn't answer (Apple Terminal, tmux without passthrough, piped output, `TERM=dumb`), it automatically falls back to the plain text attachment listing. `SLOPTOOT_FORCE_GFX=1` skips the probe so the control sequences can be captured for debugging (e.g. under `script`).
+
+The view uses a hybrid layout so the whole post fits one screen: in a wide (≥92 col) terminal with a single image, the text sits on the left and the image is pinned to the top-right (the split adapts to the image's aspect ratio so it fills the terminal height); otherwise the image is stacked under the text. Images always keep their aspect ratio, and the shell prompt lands below the whole view.
