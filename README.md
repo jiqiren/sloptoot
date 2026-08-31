@@ -96,6 +96,8 @@ Credentials live at `$XDG_CONFIG_HOME/sloptoot/config` (or `~/.config/sloptoot/c
 
 Fetched listings live in a SQLite database at `$XDG_CONFIG_HOME/sloptoot/cache.db` (or `~/.config/sloptoot/cache.db`). It holds post metadata only (never credentials) and remembers your last post so `toot --reply` can chain threads.
 
+Avatars, profile pictures, and image attachments are cached as files under `$XDG_CACHE_HOME/sloptoot/media/` (or `~/.cache/sloptoot/media/`), one file per URL named by the URL's SHA-256 hash — repeat `view`/`ls` runs reuse what was already downloaded instead of re-fetching. `view` caches the full-resolution image; `ls` uses the small thumbnail (`preview_url`) for stacked listings. This is a pure performance cache: you can `rm -rf ~/.cache/sloptoot` any time without breaking anything.
+
 ## Exit codes
 
 - `0` success
@@ -116,6 +118,7 @@ sloptoot/
 │   ├── toot.{c,h}        post a status, replies, delete, chain anchor
 │   ├── timeline.{c,h}    ls command (profile / home / hashtag)
 │   ├── cache.{c,h}       SQLite status cache
+│   ├── media_cache.{c,h} on-disk image cache (hex SHA-256 of the URL as the file name)
 │   ├── edit.{c,h}        $EDITOR compose flow
 │   ├── view.{c,h}        view command (detailed single-status view)
 │   ├── image.{c,h}       image decode (JPEG/PNG/GIF/WebP -> RGBA) + PNG encode

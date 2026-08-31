@@ -1,5 +1,5 @@
 project('sloptoot', 'c',
-  version : '1.4.0',
+  version : '1.4.1',
   default_options : [
     'c_std=c23',
     'warning_level=2',
@@ -45,6 +45,7 @@ src = files(
   'src/oauth.c',
   'src/toot.c',
   'src/cache.c',
+  'src/media_cache.c',
   'src/timeline.c',
   'src/edit.c',
   'src/view.c',
@@ -93,6 +94,18 @@ test('cache', executable('cache_test', 'tests/cache_test.c',
   'src/json_helpers.c',
   include_directories : 'src',
   dependencies : [cjson_dep, sqlite_dep],
+  c_args : common_args,
+))
+
+test('media_cache', executable('media_cache_test', 'tests/media_cache_test.c',
+  'src/media_cache.c',
+  'src/http.c',
+  (host_machine.system() == 'darwin' ? files('src/sha256_apple.c')
+                                     : files('src/sha256_posix.c')),
+  include_directories : 'src',
+  dependencies : [curl_dep,
+                  (host_machine.system() == 'darwin' ? []
+                                                     : dependency('libcrypto'))],
   c_args : common_args,
 ))
 

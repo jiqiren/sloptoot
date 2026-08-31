@@ -5,6 +5,7 @@
 #include "image.h"
 #include "json_helpers.h"
 #include "kitty.h"
+#include "media_cache.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -109,22 +110,28 @@ static bool attachment_is_image(const cJSON *att) {
 }
 
 /* Fetch and decode an image from a URL. Media and avatars are public, so no
- * auth is sent (they often live on a CDN other than the instance). */
+ * auth is sent (they often live on a CDN other than the instance). Bytes come
+ * from the on-disk media cache when available (keyed by URL), so repeated
+ * listings reuse what was already downloaded. */
 static bool load_image_url(const char *url, img_image *out) {
   if (url == nullptr || url[0] == '\0') return false;
-  http_response resp = {0};
-  if (!http_get(url, nullptr, &resp)) {
-    http_response_free(&resp);
-    return false;
-  }
-  if (resp.code < 200 || resp.code >= 300 || resp.len == 0 ||
-      resp.body == nullptr) {
-    http_response_free(&resp);
-    return false;
-  }
-  bool ok = img_decode((const uint8_t *)resp.body, resp.len, out) == 0;
-  http_response_free(&resp);
+  uint8_t *data = nullptr;
+  size_t len = 0;
+  if (!media_cache_fetch(url, &data, &len)) return false;
+  bool ok = img_decode(data, len, out) == 0;
+  free(data);
   return ok;
+}
+
+/* The URL to download for an image attachment in a listing: the thumbnail
+ * (`preview_url`) when the instance provides one — stacked listings render the
+ * preview at ~40% of the screen, so the small file is plenty and much cheaper
+ * than the full-resolution media — else the full original URL. */
+static const char *attachment_url(const cJSON *att) {
+  if (att == nullptr) return nullptr;
+  const char *url = json_get_string(att, "preview_url");
+  if (url == nullptr || url[0] == '\0') url = json_get_string(att, "url");
+  return (url != nullptr && url[0] != '\0') ? url : nullptr;
 }
 
 /* The account that owns this timeline entry: for a boost the reblogger, else
@@ -275,7 +282,7 @@ static void ls_render_items(const cJSON *all, bool wrap) {
     for (int i = 0; i < nmedia && atts != nullptr; i++) {
       const cJSON *att = cJSON_GetArrayItem(media, i);
       if (!attachment_is_image(att)) continue;
-      const char *u = att != nullptr ? json_get_string(att, "url") : nullptr;
+      const char *u = attachment_url(att);
       if (u != nullptr && load_image_url(u, &atts[natt].im)) {
         img_fit_aspect(&atts[natt].im, tcols - 1, att_rmax, cw, ch,
                        &atts[natt].cols, &atts[natt].rows);

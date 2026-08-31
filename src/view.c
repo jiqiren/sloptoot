@@ -6,6 +6,7 @@
 #include "image.h"
 #include "json_helpers.h"
 #include "kitty.h"
+#include "media_cache.h"
 #include "toot.h"
 
 #include <stdio.h>
@@ -54,25 +55,19 @@ static bool attachment_is_image(const cJSON *att) {
 
 /* Fetch and decode a single image attachment. Media rarely needs auth and is
  * often served from a different host than the instance; the bearer token is
- * never sent to a CDN. */
+ * never sent to a CDN. Bytes come from the on-disk media cache when available
+ * (keyed by URL), so repeat views are instant and offline-friendly. */
 static bool load_attachment(const cJSON *att, img_image *out) {
   if (!attachment_is_image(att)) return false;
   const char *url = att != nullptr ? json_get_string(att, "url") : nullptr;
   if (url == nullptr || url[0] == '\0') return false;
 
-  http_response resp = {0};
-  if (!http_get(url, nullptr, &resp)) {
-    http_response_free(&resp);
-    return false;
-  }
-  if (resp.code < 200 || resp.code >= 300 || resp.len == 0 ||
-      resp.body == nullptr) {
-    http_response_free(&resp);
-    return false;
-  }
+  uint8_t *data = nullptr;
+  size_t len = 0;
+  if (!media_cache_fetch(url, &data, &len)) return false;
 
-  bool ok = img_decode((const uint8_t *)resp.body, resp.len, out) == 0;
-  http_response_free(&resp);
+  bool ok = img_decode(data, len, out) == 0;
+  free(data);
   return ok;
 }
 

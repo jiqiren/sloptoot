@@ -79,7 +79,7 @@ Lists posts as plain text lines (`<id>  <relative-time>  <text>` with HTML strip
 
 By default `ls` fetches enough posts (paging via `max_id`, `limit=40`) to fill the terminal height minus two rows (via terminal rows from `TIOCGWINSZ`, fallback 24), so the shell prompt isn't pushed off. Only the posts that fit are printed.
 
-**Inline images** (kitty-capable terminals only): when the terminal supports the kitty graphics protocol (`kgraphics_supported()`), `ls` renders each post's author avatar (the reblogger's for boosts) to the left of the text — a two-row-tall, aspect-preserving placement drawn behind a reserved gutter — and stacks any image `media_attachments` below the post, capped at ~40% of the terminal height so a wide feed image never monopolizes the listing (the full image is one `view` away). Text is word-wrapped to the remaining width; a `C=1` avatar placement never moves the cursor, and the listing stops once the screen is full so the prompt stays below. In a terminal without kitty support, or for `--mobile` (cached rows have no avatar/media URLs), the listing falls back to the plain text rows described above.
+**Inline images** (kitty-capable terminals only): when the terminal supports the kitty graphics protocol (`kgraphics_supported()`), `ls` renders each post's author avatar (the reblogger's for boosts) to the left of the text — a two-row-tall, aspect-preserving placement drawn behind a reserved gutter — and stacks any image `media_attachments` below the post (downloaded as the small `preview_url` thumbnail, capped at ~40% of the terminal height) so a wide feed image never monopolizes the listing (the full image is one `view` away). Text is word-wrapped to the remaining width; a `C=1` avatar placement never moves the cursor, and the listing stops once the screen is full so the prompt stays below. In a terminal without kitty support, or for `--mobile` (cached rows have no avatar/media URLs), the listing falls back to the plain text rows described above.
 
 **Boosts** are shown specially: the first line shows the boost id, relative time, a 🚀 emoji, and the boosting account's handle; a second, slightly indented line (introduced by `⎣`) shows the id, relative time, and text of the originally boosted post (its `reblog`).
 - No argument or `profile` — your posts/replies: `GET /api/v1/accounts/{account_id}/statuses`.
@@ -141,6 +141,12 @@ The shared resolver `resolve_status_id(ref)` fetches the status and unwraps a bo
   - `meta(k, v)` — scalars: `last_post_id` (thread chain anchor), `last_type` (most recently loaded timeline).
 - Contents are post metadata/ids only — never secrets.
 
+## Media cache
+- Path: `$XDG_CACHE_HOME/sloptoot/media/` or `$HOME/.cache/sloptoot/media/`.
+- One file per URL, named by the hex SHA-256 of the URL, so a lookup is a single deterministic `open()` — O(1) keyed by URL. `media_cache_fetch(url)` consults the cache first and only downloads (public, unauthenticated media) on a miss, then persists the raw bytes for next time. Cached entries never expire; Mastodon/GoToSocial URLs are content-addressed/versioned, so a changed image gets a new URL and a new cache key.
+- Files are written atomically (temp + rename, mode 0600). Cache/disk failures are never fatal — the caller still gets a fresh download. This is only a performance cache: entries can be deleted freely (`rm -rf ~/.cache/sloptoot`).
+- What is cached: avatar images (`avatar_static`/`avatar`) and image `media_attachments`. `view` caches the full-resolution media `url`; `ls` stacked listings fetch instead the small `preview_url` thumbnail (when the instance provides one) so a feed listing doesn't download full-res files.
+
 ## Exit codes
 - `0` success
 - `1` usage error
@@ -168,6 +174,7 @@ sloptoot/
 │   ├── toot.h / toot.c       (post + reply, delete, normalize id, chain anchor)
 │   ├── timeline.h / timeline.c (ls: profile/home/#tag)
 │   ├── cache.h / cache.c     (SQLite status cache)
+│   ├── media_cache.h / media_cache.c (on-disk image cache keyed by URL hash; feed + view images)
 │   ├── edit.h / edit.c       ($EDITOR compose flow)
 │   ├── view.h / view.c       (view: detailed single-status view; inline image attachments)
 │   ├── image.h / image.c     (decode JPEG/PNG/GIF/WebP -> RGBA frames; encode RGBA -> PNG)
