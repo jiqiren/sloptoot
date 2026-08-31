@@ -134,7 +134,7 @@ The shared resolver `resolve_status_id(ref)` fetches the status and unwraps a bo
 - Created with mode 0600 (`open(O_CREAT, 0600)` + `fchmod`).
 
 ## SQLite cache
-- Path: `$XDG_CONFIG_HOME/sloptoot/cache.db` or `$HOME/.config/sloptoot/cache.db`.
+- Path: `$XDG_CACHE_HOME/sloptoot/cache.db` or `$HOME/.cache/sloptoot/cache.db` (the same cache dir as the media cache, so all cacheable data stays under one roof). A `cache.db` left in the config dir by a pre-1.4.3 build is moved here automatically on the first cache use (`cache_open` renames it before opening; failures are never fatal — the old cache is simply abandoned).
 - Tables:
   - `statuses(id, created_at, account, content, reblog_of, avatar)` — deduplicated statuses; a boost wrapper row carries the boosted inner id in `reblog_of`, the booster's handle in `account`, and the booster's avatar URL in `avatar`. The inner boosted post is stored for lookup but is not itself a timeline entry.
   - `status_media(status_id, pos, mime, url, preview, description, type)` — each status's `media_attachments`, so `ls --mobile` can resolve the cached image files for offline rendering.

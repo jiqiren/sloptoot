@@ -7,14 +7,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
-/* The cache honours XDG_CONFIG_HOME; point it at a scratch dir so the test
- * never touches real credentials. */
+/* The cache honours XDG_CONFIG_HOME and XDG_CACHE_HOME; point both at a
+ * scratch dir so the test never touches real credentials or the real cache. */
 static int run(void) {
   char dir[] = "/tmp/sloptoot-cache-test-XXXXXX";
   if (mkdtemp(dir) == nullptr) return 1;
   if (setenv("XDG_CONFIG_HOME", dir, 1) != 0) return 1;
+  if (setenv("XDG_CACHE_HOME", dir, 1) != 0) return 1;
 
   cache c;
   if (!cache_open(&c)) return 1;
@@ -181,6 +183,7 @@ static int run_delete(void) {
   char dir[] = "/tmp/sloptoot-cache-del-XXXXXX";
   if (mkdtemp(dir) == nullptr) return 1;
   if (setenv("XDG_CONFIG_HOME", dir, 1) != 0) return 1;
+  if (setenv("XDG_CACHE_HOME", dir, 1) != 0) return 1;
 
   cache c;
   if (!cache_open(&c)) return 1;
@@ -274,4 +277,52 @@ static int run_wrap(void) {
   return 0;
 }
 
-int main(void) { return run() || run_delete() || run_wrap(); }
+/* A pre-1.4.3 cache.db sitting in the config dir is moved to the cache dir
+ * first time the cache is opened, and its data survives. */
+static int run_migrate(void) {
+  char dir[] = "/tmp/sloptoot-cache-migrate-XXXXXX";
+  if (mkdtemp(dir) == nullptr) return 1;
+  char cfg[400], cch[400];
+  snprintf(cfg, sizeof(cfg), "%s/config", dir);
+  snprintf(cch, sizeof(cch), "%s/cache", dir);
+  if (mkdir(cfg, 0700) != 0 || mkdir(cch, 0700) != 0) return 1;
+  if (setenv("XDG_CONFIG_HOME", cfg, 1) != 0) return 1;
+  if (setenv("XDG_CACHE_HOME", cch, 1) != 0) return 1;
+
+  /* Simulate an older release: a cache.db stored next to the credentials. */
+  char olddir[512];
+  snprintf(olddir, sizeof(olddir), "%s/sloptoot", cfg);
+  char legacy[512];
+  snprintf(legacy, sizeof(legacy), "%s/cache.db", olddir);
+  if (mkdir(olddir, 0700) != 0) return 1;
+  sqlite3 *db = nullptr;
+  if (sqlite3_open(legacy, &db) != SQLITE_OK || db == nullptr) return 1;
+  if (sqlite3_exec(db,
+                   "CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT);"
+                   "INSERT INTO meta VALUES('last_post_id','123');",
+                   nullptr, nullptr, nullptr) != SQLITE_OK)
+    return 1;
+  sqlite3_close(db);
+
+  /* Opening the cache relocates it before use; the chain anchor survives. */
+  cache c;
+  if (!cache_open(&c)) return 1;
+  char *last = cache_last_post_id(&c);
+  if (last == nullptr || strcmp(last, "123") != 0) return 1;
+  free(last);
+  cache_close(&c);
+
+  /* The legacy file is gone; the data now lives in the cache dir. */
+  char newpath[512];
+  snprintf(newpath, sizeof(newpath), "%s/sloptoot/cache.db", cch);
+  int ok = access(legacy, F_OK) != 0 && access(newpath, F_OK) == 0;
+
+  char cmd[256];
+  snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+  (void)system(cmd);
+  return ok ? 0 : 1;
+}
+
+int main(void) {
+  return run() || run_delete() || run_migrate() || run_wrap();
+}

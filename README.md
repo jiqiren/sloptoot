@@ -94,7 +94,7 @@ Credentials live at `$XDG_CONFIG_HOME/sloptoot/config` (or `~/.config/sloptoot/c
 
 ### Cache
 
-Fetched listings live in a SQLite database at `$XDG_CONFIG_HOME/sloptoot/cache.db` (or `~/.config/sloptoot/cache.db`). It holds post metadata only (never credentials) and remembers your last post so `toot --reply` can chain threads.
+Fetched listings live in a SQLite database at `$XDG_CACHE_HOME/sloptoot/cache.db` (or `~/.cache/sloptoot/cache.db`). It holds post metadata only (never credentials) and remembers your last post so `toot --reply` can chain threads. A `cache.db` left over from a pre-1.4.3 installation in the config dir is moved here automatically the first time it's used.
 
 Avatars, profile pictures, and image attachments are cached as files under `$XDG_CACHE_HOME/sloptoot/media/` (or `~/.cache/sloptoot/media/`), one file per URL named by the URL's SHA-256 hash — repeat `view`/`ls` runs reuse what was already downloaded instead of re-fetching. `view` caches the full-resolution image; `ls` uses the small thumbnail (`preview_url`) for stacked listings. `ls --mobile` draws avatars/thumbnails from these cached files (the SQLite cache stores each post's avatar and media URLs); a not-yet-cached image is fetched and stored for next time, so only fully-cached runs are offline. This is a pure performance cache: you can `rm -rf ~/.cache/sloptoot` any time without breaking anything.
 

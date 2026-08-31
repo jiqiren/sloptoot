@@ -1,6 +1,7 @@
 #include "cache.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,8 +32,31 @@ static void ensure_dir(const char *path) {
   free(copy);
 }
 
-/* Cache database lives alongside the credentials file so both honor XDG. */
+/* The cache database now lives in the user cache dir (`$XDG_CACHE_HOME`,
+ * else `$HOME/.cache`) — separate from the credentials in the config dir.
+ * Builds before 1.4.3 stored it alongside the config file; cache_open()
+ * migrates
+ * any such file over before the database is opened. */
 static char *cache_path(void) {
+  const char *xdg = getenv("XDG_CACHE_HOME");
+  const char *home;
+  if (xdg != nullptr && xdg[0] != '\0') {
+    size_t n = strlen(xdg) + strlen("/sloptoot/cache.db") + 1;
+    char *p = malloc(n);
+    if (p != nullptr) snprintf(p, n, "%s/sloptoot/cache.db", xdg);
+    return p;
+  }
+  home = getenv("HOME");
+  if (home == nullptr || home[0] == '\0') return nullptr;
+  size_t n = strlen(home) + strlen("/.cache/sloptoot/cache.db") + 1;
+  char *p = malloc(n);
+  if (p != nullptr) snprintf(p, n, "%s/.cache/sloptoot/cache.db", home);
+  return p;
+}
+
+/* The pre-1.4.3 cache database location: next to the credentials, in the
+ * config dir. Fresh allocation, or null when HOME is unset. */
+static char *legacy_cache_path(void) {
   const char *xdg = getenv("XDG_CONFIG_HOME");
   const char *home;
   if (xdg != nullptr && xdg[0] != '\0') {
@@ -49,10 +73,79 @@ static char *cache_path(void) {
   return p;
 }
 
+/* Copy `src` to `dst` byte-for-byte, used when rename(2) cannot move across
+ * devices (EXDEV). Returns false on any failure. */
+static bool copy_file(const char *dst, const char *src) {
+  int in = open(src, O_RDONLY);
+  if (in < 0) return false;
+  int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (out < 0) {
+    close(in);
+    return false;
+  }
+  if (fchmod(out, 0600) != 0) {
+    close(in);
+    close(out);
+    unlink(dst);
+    return false;
+  }
+  char buf[65536];
+  bool ok = true;
+  for (;;) {
+    ssize_t r = read(in, buf, sizeof(buf));
+    if (r < 0) {
+      ok = false;
+      break;
+    }
+    if (r == 0) break;
+    size_t off = 0;
+    while (off < (size_t)r) {
+      ssize_t w = write(out, buf + off, (size_t)r - off);
+      if (w <= 0) {
+        ok = false;
+        break;
+      }
+      off += (size_t)w;
+    }
+    if (!ok) break;
+  }
+  close(in);
+  if (close(out) != 0) ok = false;
+  if (!ok) unlink(dst);
+  return ok;
+}
+
+/* One-time relocation of a pre-1.4.3 cache.db: move the config-dir file to
+ * new cache-dir home before it is opened, so the user never notices. The new
+ * path wins if both exist; failures are never fatal (the caller just loses
+ * the old cache and starts fresh). */
+static void migrate_cache_db(const char *new_path) {
+  char *old_path = legacy_cache_path();
+  if (old_path == nullptr) return;
+  if (access(new_path, F_OK) == 0 || access(old_path, F_OK) != 0) {
+    free(old_path);
+    return;
+  }
+  ensure_dir(new_path);
+  if (rename(old_path, new_path) == 0) {
+    /* Best effort: drop the sloptoot dir left in the config dir if the
+     * credentials file is elsewhere (a non-empty dir fails silently). */
+    char *slash = strrchr(old_path, '/');
+    if (slash != nullptr && slash != old_path) {
+      *slash = '\0';
+      rmdir(old_path);
+    }
+  } else if (errno == EXDEV && copy_file(new_path, old_path)) {
+    unlink(old_path);
+  }
+  free(old_path);
+}
+
 bool cache_open(cache *c) {
   c->db = nullptr;
   c->path = cache_path();
   if (c->path == nullptr) return false;
+  migrate_cache_db(c->path);
   ensure_dir(c->path);
   sqlite3 *db = nullptr;
   if (sqlite3_open(c->path, &db) != SQLITE_OK || db == nullptr) {
