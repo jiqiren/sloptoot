@@ -66,11 +66,38 @@ static bool terminal_usable(void) {
   return true;
 }
 
+/* Terminals known to implement the kitty graphics protocol. The probe is an
+ * APC escape sequence; terminals with sloppy parsers (Apple Terminal and
+ * friends) print its payload as garbage text on the screen, so it must only
+ * be sent where it will be parsed correctly. The markers below propagate over
+ * SSH for the terminals that set TERM accordingly (kitty, Ghostty, WezTerm,
+ * foot); iTerm2 and Konsole are detected locally via their own env vars. */
+static bool env_kitty_capable(void) {
+  static const char *const terms[] = {"kitty", "ghostty", "wezterm", "foot"};
+  const char *term = getenv("TERM");
+  if (term != nullptr) {
+    for (size_t i = 0; i < sizeof(terms) / sizeof(terms[0]); i++)
+      if (strstr(term, terms[i]) != nullptr) return true;
+  }
+  const char *tp = getenv("TERM_PROGRAM");
+  if (tp != nullptr && (strcmp(tp, "kitty") == 0 || strcmp(tp, "ghostty") == 0 ||
+                        strcmp(tp, "WezTerm") == 0))
+    return true;
+  if (getenv("KITTY_WINDOW_ID") != nullptr) return true;
+  if (getenv("GHOSTTY_RESOURCES_DIR") != nullptr) return true;
+  if (getenv("WEZTERM_EXECUTABLE") != nullptr) return true;
+  if (getenv("ITERM_SESSION_ID") != nullptr) return true; /* iTerm2 3.5+ */
+  if (getenv("KONSOLE_VERSION") != nullptr) return true;
+  return false;
+}
+
 static bool probe_support(void) {
   /* Debug/testing escape hatch: with SLOPTOOT_FORCE_GFX set the probe is
    * skipped so the control sequences can be captured and inspected (for
    * example under `script`). */
   if (getenv("SLOPTOOT_FORCE_GFX") != nullptr) return true;
+
+  if (!env_kitty_capable()) return false;
 
   /* The recommended probe: a query action with an id. A graphics-capable
    * terminal replies `i=31;OK` immediately; silence means unsupported.
@@ -197,9 +224,9 @@ bool kgraphics_render(const img_image *img, unsigned cols, unsigned rows,
     if (ok) {
       /* Root-frame gap (the base image has no z of its own). */
       if (img->frames[0].delay_ms > 0)
-        printf("\x1b_Ga=a,i=%u,r=1,z=%u\x1b\\", id, img->frames[0].delay_ms);
+        printf("\x1b_Ga=a,i=%u,r=1,z=%u,q=2\x1b\\", id, img->frames[0].delay_ms);
       uint32_t loops = img->loop_count > 0 ? img->loop_count : 1;
-      printf("\x1b_Ga=a,i=%u,s=3,v=%u\x1b\\", id, loops);
+      printf("\x1b_Ga=a,i=%u,s=3,v=%u,q=2\x1b\\", id, loops);
     }
     if (!ok) return true; /* degrade to a still frame */
   }
