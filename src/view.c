@@ -93,6 +93,34 @@ static void print_trunc(const char *s, unsigned width) {
   printf("%s\n", line);
 }
 
+/* Print `prefix` (e.g. "  [1] ") followed by `text`, word-wrapped so the whole
+ * line fits `width` display columns — never truncated, so the full ALT text is
+ * readable. Continuation lines are indented to align under the prefix. Returns
+ * the number of display rows consumed. */
+static unsigned print_wrapped_caption(const char *prefix, const char *text,
+                                      unsigned width) {
+  size_t pl = strlen(prefix);
+  unsigned w = width > pl ? width - pl : 1;
+  char wrap[8192];
+  size_t lines = cache_wrap(text != nullptr ? text : "", w, wrap, sizeof(wrap));
+  if (lines == 0) lines = 1;
+  bool first = true;
+  const char *p = wrap;
+  while (true) {
+    const char *nl = strchr(p, '\n');
+    if (!first) printf("%*s", (int)pl, "");
+    if (nl != nullptr) {
+      printf("%.*s\n", (int)(nl - p), p);
+      p = nl + 1;
+    } else {
+      printf("%s\n", p);
+      break;
+    }
+    first = false;
+  }
+  return (unsigned)lines;
+}
+
 int view_status(const char *ref, bool mobile) {
   char *id = normalize_status_id(ref);
   if (id == nullptr) {
@@ -326,44 +354,47 @@ int view_status(const char *ref, bool mobile) {
   print_trunc(line, tw);
   used++;
 
-  /* Attachments: rendered in the right pane when side-by-side, otherwise
-   * listed as captions above the stacked images. */
+  /* Attachment captions (with the ALT text/description, word-wrapped so the
+   * full text is readable) always print in the text pane: side-by-side the
+   * picture lives in its own right-hand pane so the captions can never
+   * overlap it, and stacked the images are positioned explicitly below this
+   * block (see the render section). Non-image attachments show their type
+   * instead. */
   if (nmedia > 0) {
     snprintf(line, sizeof(line), "Attachments: %d", nmedia);
     print_trunc(line, tw);
     used++;
-    if (!side || !gfx) {
-      for (int i = 0; i < nmedia; i++) {
-        const cJSON *att = cJSON_GetArrayItem(media, i);
-        const char *desc = att != nullptr
-                               ? json_get_string(att, "description")
-                               : nullptr;
-        char alt[1024] = "";
-        if (desc != nullptr && desc[0] != '\0')
-          cache_plain_text(desc, alt, sizeof(alt));
-        if (gfx && attachment_is_image(att) &&
-            /* an in-sequence entry should be "rendered below" */
-            ents != nullptr) {
-          /* find the ent index for this attachment */
-          size_t e = 0;
-          while (e < nents && ents[e].att != att) e++;
-          if (e < nents && ents[e].ok) {
-            snprintf(line, sizeof(line), "  [%d] %s", i + 1,
-                     alt[0] != '\0' ? alt : "(no description)");
-            print_trunc(line, tw);
-            used++;
-            continue;
-          }
-        }
-        const char *type = att != nullptr ? json_get_string(att, "type") : nullptr;
-        if (alt[0] != '\0')
-          snprintf(line, sizeof(line), "  [%d] %s", i + 1, alt);
-        else
-          snprintf(line, sizeof(line), "  [%d] <%s>", i + 1,
-                   type != nullptr ? type : "?");
-        print_trunc(line, tw);
-        used++;
+    for (int i = 0; i < nmedia; i++) {
+      const cJSON *att = cJSON_GetArrayItem(media, i);
+      const char *desc = att != nullptr
+                             ? json_get_string(att, "description")
+                             : nullptr;
+      char alt[1024] = "";
+      if (desc != nullptr && desc[0] != '\0')
+        cache_plain_text(desc, alt, sizeof(alt));
+
+      /* The caption shows the (now wrapped) ALT text. When the image decoded,
+       * "no description" marks an unattributed picture; otherwise a text-less
+       * attachment shows its type. */
+      bool rendered = false;
+      if (gfx && attachment_is_image(att) && ents != nullptr) {
+        size_t e = 0;
+        while (e < nents && ents[e].att != att) e++;
+        if (e < nents && ents[e].ok) rendered = true;
       }
+      char cap[1024 + 32];
+      if (alt[0] != '\0')
+        snprintf(cap, sizeof(cap), "%s", alt);
+      else if (rendered)
+        snprintf(cap, sizeof(cap), "(no description)");
+      else {
+        const char *type =
+            att != nullptr ? json_get_string(att, "type") : nullptr;
+        snprintf(cap, sizeof(cap), "<%s>", type != nullptr ? type : "?");
+      }
+      char pfx[24];
+      snprintf(pfx, sizeof(pfx), "  [%d] ", i + 1);
+      used += print_wrapped_caption(pfx, cap, tw);
     }
   }
 
@@ -393,15 +424,22 @@ int view_status(const char *ref, bool mobile) {
     } else {
       /* Stack below the text: split the leftover rows among the images,
        * weighted by aspect ratio so tall images get more height, then fit
-       * each image within (full width, its allocation) preserving aspect. */
+       * each image within (full width, its allocation) preserving aspect.
+       * Each placement is CUP'd to its own row — the first just below the
+       * captions, the rest below the previous image — so a picture can never
+       * be drawn over the text/alt captions no matter how the terminal moves
+       * the cursor after a placement (the protocol leaves that unspecified).
+       * The cursor is parked below the stack afterwards. */
       int budget = (int)trows - (int)used - 2;
       if (budget < 6) budget = 6;
       double sum = 0;
       for (size_t e = 0; e < nents; e++)
         if (ents[e].ok && ents[e].px_w > 0)
           sum += (double)ents[e].px_h / (double)ents[e].px_w;
+      unsigned row = used + 1;
       for (size_t e = 0; e < nents; e++) {
         if (!ents[e].ok) continue;
+        if (row > trows) break; /* the text already fills the screen */
         unsigned alloc = (unsigned)budget;
         if (sum > 0 && ents[e].px_w > 0)
           alloc = (unsigned)((double)budget *
@@ -410,8 +448,12 @@ int view_status(const char *ref, bool mobile) {
         if (alloc < 6) alloc = 6;
         unsigned c = 0, r = 0;
         img_fit_aspect(&ents[e].im, tcols - 1, alloc, cw, ch, &c, &r);
+        printf("\x1b[%u;1H", row);
         kgraphics_render(&ents[e].im, c, r, false);
+        row += r + 1;
       }
+      printf("\x1b[%u;1H", row > trows ? trows : row);
+      fflush(stdout);
     }
   }
 
