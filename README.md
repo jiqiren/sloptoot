@@ -12,15 +12,15 @@ Then run `sloptoot login <instance>` to get started.
 
 ## What it does
 
-- `sloptoot login <instance>` — run the Mastodon OAuth login dance and store a Bearer token.
+- `sloptoot login <instance> [--oob]` — run the Mastodon OAuth login dance and store a Bearer token. `--oob` skips the loopback server and uses the paste-a-code flow.
 - `sloptoot toot "<text>"` — post a new public status.
-- `sloptoot toot` — compose in `$EDITOR` (leaving the buffer empty cancels the post).
-- `sloptoot toot --reply` — reply to your most recent post (thread chaining).
-- `sloptoot toot --reply <id-or-url>` — reply to a specific status.
-- `sloptoot ls [profile|timeline|#tag]` — list your posts, your home timeline, or hashtag posts. Default output truncates to your terminal width; `-l`/`--long` prints full (wrapped) text. In a kitty-capable terminal it also renders each poster/reblogger's avatar beside the text and any image attachments below.
-- `sloptoot ls --mobile` — serve the last listing from the local cache instead of hitting the network. In a kitty-capable terminal it still draws avatars and image thumbnails, read from the cached media files.
+- `sloptoot toot` — compose in `$EDITOR` (falls back to `$VISUAL`, then `vi`; leaving the buffer empty cancels the post).
+- `sloptoot toot --reply` (or `-r`) — reply to your most recent post (thread chaining).
+- `sloptoot toot --reply <id-or-url>` (or `-r <id-or-url>`, `--reply=<id-or-url>`) — reply to a specific status.
+- `sloptoot ls [profile|timeline|home|#tag]` — list your posts, your home timeline (`timeline`/`home`), or hashtag posts. Default output truncates to your terminal width; `-l`/`--long` prints full (wrapped) text; `-m`/`--mobile` serves the cached listing. In a kitty-capable terminal it also renders each poster/reblogger's avatar beside the text and any image attachments below.
+- `sloptoot ls --mobile` — serve the cached listing for the requested type (default: the most recently loaded timeline, falling back to `profile`) instead of hitting the network. In a kitty-capable terminal it still draws avatars and image thumbnails, read from the cached media files.
 - `sloptoot delete <id-or-url>` — remove one of your posts (server and local cache).
-- `sloptoot view <id-or-url>` — show a detailed view of a post (author, text, date, boost/like/reply counts). Image attachments (PNG/JPEG/GIF/WebP) are rendered inline when your terminal supports the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html); elsewhere they fall back to a text-only listing. Animated GIFs/WebPs animate in place.
+- `sloptoot view <id-or-url>` — show a detailed view of a post: author display name/handle, text, posted date, id, canonical URL, visibility, posting client, boost/like/reply counts, and attachment captions (ALT text). Image attachments (PNG/JPEG/GIF/WebP) are rendered inline when your terminal supports the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html); elsewhere they fall back to a text-only listing. Animated GIFs/WebPs animate in place. `-m`/`--mobile` serves an already-cached post without network (handle, text, posted time, id only).
 - `sloptoot boost <id-or-url>` — boost (reblog) a post.
 - `sloptoot like <id-or-url>` — favourite a post.
 - `sloptoot bookmark <id-or-url>` — bookmark a post.
@@ -61,7 +61,7 @@ Works with both Mastodon and GoToSocial instances.
 3. Generates a PKCE `code_verifier` (32 bytes from `/dev/urandom`, base64url-encoded) and `code_challenge = base64url(SHA-256(verifier))`.
 4. Opens your browser to the instance's `/oauth/authorize` endpoint with the challenge and a random `state`.
 5. Waits for the instance to redirect back with `?code=...&state=...`, validates `state`, exchanges the code for an access token, and verifies via `/api/v1/accounts/verify_credentials`.
-6. Saves credentials to `~/.config/sloptoot/config` (mode 0600).
+6. Saves credentials to `$XDG_CONFIG_HOME/sloptoot/config` (or `~/.config/sloptoot/config`), mode 0600.
 
 If the loopback server can't bind, it falls back to the OOB flow: the instance displays a code on a page and you paste it into the CLI.
 
@@ -82,9 +82,11 @@ meson setup build && meson compile -C build
 
 ```sh
 sudo apt install meson pkg-config libcurl4-openssl-dev libssl-dev libsqlite3-dev \
-  libpng-dev libjpeg-turbo8-dev libnsgif-dev libwebp-dev
+  libpng-dev libjpeg-dev libwebp-dev
 meson setup build && meson compile -C build
 ```
+
+`libnsgif` isn't packaged in current Debian/Ubuntu releases (Debian's old `libnsgif0-dev` is an incompatible API), so build it from source with its NetSurf buildsystem (`make && make install`) so `pkg-config libnsgif` resolves.
 
 The build uses `c_std=c23`, `warning_level=2`, and `werror=true` — it must compile cleanly under `-Wall -Wextra -Werror`.
 
@@ -96,7 +98,9 @@ Credentials live at `$XDG_CONFIG_HOME/sloptoot/config` (or `~/.config/sloptoot/c
 
 Fetched listings live in a SQLite database at `$XDG_CACHE_HOME/sloptoot/cache.db` (or `~/.cache/sloptoot/cache.db`). It holds post metadata only (never credentials) and remembers your last post so `toot --reply` can chain threads. A `cache.db` left over from a pre-1.4.3 installation in the config dir is moved here automatically the first time it's used.
 
-Avatars, profile pictures, and image attachments are cached as files under `$XDG_CACHE_HOME/sloptoot/media/` (or `~/.cache/sloptoot/media/`), one file per URL named by the URL's SHA-256 hash — repeat `view`/`ls` runs reuse what was already downloaded instead of re-fetching. `view` caches the full-resolution image; `ls` uses the small thumbnail (`preview_url`) for stacked listings. `ls --mobile` draws avatars/thumbnails from these cached files (the SQLite cache stores each post's avatar and media URLs); a not-yet-cached image is fetched and stored for next time, so only fully-cached runs are offline. This is a pure performance cache: you can `rm -rf ~/.cache/sloptoot` any time without breaking anything.
+Avatars, profile pictures, and image attachments are cached as files under `$XDG_CACHE_HOME/sloptoot/media/` (or `~/.cache/sloptoot/media/`), one file per URL named by the URL's hex SHA-256 — repeat `view`/`ls` runs reuse what was already downloaded instead of re-fetching. `view` caches the full-resolution image; `ls` uses the small thumbnail (`preview_url`) for stacked listings. `ls --mobile` draws avatars/thumbnails from these cached files (the SQLite cache stores each post's avatar and media URLs); a not-yet-cached image is fetched and stored for next time, so only fully-cached runs are offline.
+
+The media directory is a pure performance cache: `rm -rf ~/.cache/sloptoot/media` is always safe. Deleting `cache.db` too is safe but loses the cached listings and the last-post anchor, so bare `toot --reply` will report no previous post until you post again.
 
 ## Exit codes
 
@@ -135,9 +139,13 @@ sloptoot/
 │   ├── config_test.c
 │   ├── loopback_test.c
 │   ├── cache_test.c
-│   └── image_test.c     decodes real PNG/JPEG/GIF/WebP fixtures
+│   ├── media_cache_test.c  URL-hash keying + on-disk fetch/store
+│   ├── image_test.c     decodes real PNG/JPEG/GIF/WebP fixtures
+│   ├── image_fixtures.h
+│   └── fixtures/        sample PNG/JPEG/GIF/WebP (incl. animated)
 ├── Spec.md
 ├── AGENTS.md
+├── Todo.md
 ├── README.md
 └── LICENSE
 ```

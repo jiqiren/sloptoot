@@ -29,13 +29,14 @@ static void print_usage(const char *prog) {
           "                       -r, --reply[=<id-or-url>]\n"
           "                           reply to a status; bare --reply chains\n"
           "                           to your most recent post\n"
-          "  ls [profile|timeline|#tag] [-m] [-l]\n"
+          "  ls [profile|timeline|home|#tag] [-m] [-l]\n"
           "                     list posts. default: your posts\n"
           "                     profile   posts/replies from your account\n"
-          "                     timeline  your home timeline\n"
+          "                     timeline  your home timeline (alias: home)\n"
           "                     #tag      posts matching a hashtag\n"
           "                     -m, --mobile: serve from the local cache\n"
-          "                     instead of fetching fresh data\n"
+          "                     instead of fetching fresh data; with no\n"
+          "                     type, uses the last loaded timeline\n"
           "                     -l, --long: wrap full text instead of\n"
           "                     truncating to the terminal width\n"
            "  delete <id-or-url> remove a post from your account\n"
@@ -203,11 +204,6 @@ static int cmd_ls(int argc, char **argv) {
   }
 
   const char *norm = type;
-  if (type == nullptr || strcmp(type, "profile") == 0) {
-    norm = "profile";
-  } else if (strcmp(type, "timeline") == 0) {
-    norm = "home";
-  }
 
   config c;
   config_init(&c);
@@ -218,7 +214,36 @@ static int cmd_ls(int argc, char **argv) {
   }
   cache db;
   open_cache(&db);
+
+  /* Resolve the listing type. With no argument, `--mobile` serves whatever
+   * timeline was loaded last (the cache stores a tag without its '#'), and
+   * otherwise defaults to the profile. */
+  char *last_type = nullptr;
+  char *tag_type = nullptr;
+  if (type == nullptr) {
+    if (mobile) {
+      last_type = cache_last_type(&db);
+      if (last_type != nullptr && strcmp(last_type, "home") != 0 &&
+          strcmp(last_type, "profile") != 0) {
+        size_t n = strlen(last_type) + 2;
+        tag_type = malloc(n);
+        if (tag_type != nullptr) snprintf(tag_type, n, "#%s", last_type);
+      }
+      norm = tag_type != nullptr ? tag_type
+                                 : (last_type != nullptr ? last_type
+                                                         : "profile");
+    } else {
+      norm = "profile";
+    }
+  } else if (strcmp(type, "profile") == 0) {
+    norm = "profile";
+  } else if (strcmp(type, "timeline") == 0) {
+    norm = "home";
+  }
+
   int rc = ls_statuses(&c, &db, norm, mobile, wrap);
+  free(tag_type);
+  free(last_type);
   config_free(&c);
   cache_close(&db);
   return rc;

@@ -74,7 +74,7 @@ Flags (combined with the text form above):
 - **Editor fallback:** when no positional `"<text>"` is given, `$EDITOR` (falls back to `VISUAL`, then `vi`) opens on a temp file. If the buffer is left empty/unchanged the post is cancelled (exit 0, "cancelled" printed). Otherwise the written text is posted.
 - After any successful post the new status id is recorded as the next chain anchor.
 
-### `sloptoot ls [profile|timeline|#tag] [-m] [-l]`
+### `sloptoot ls [profile|timeline|home|#tag] [-m] [-l]`
 Lists posts as plain text lines (`<id>  <relative-time>  <text>` with HTML stripped). The id is the Mastodon status id, so a listed post can be replied to directly with `toot -r <id>` or deleted with `delete <id>`. Relative time is shown as `now`/`5m`/`3h`/`2d`/`4w`. Each line is truncated to the terminal column count (via `TIOCGWINSZ`); pass `-l`/`--long` to print full (wrapped) text instead.
 
 By default `ls` fetches enough posts (paging via `max_id`, `limit=40`) to fill the terminal height minus two rows (via terminal rows from `TIOCGWINSZ`, fallback 24), so the shell prompt isn't pushed off. Only the posts that fit are printed.
@@ -83,11 +83,11 @@ By default `ls` fetches enough posts (paging via `max_id`, `limit=40`) to fill t
 
 **Boosts** are shown specially: the first line shows the boost id, relative time, a 🚀 emoji, and the boosting account's handle; a second, slightly indented line (introduced by `⎣`) shows the id, relative time, and text of the originally boosted post (its `reblog`).
 - No argument or `profile` — your posts/replies: `GET /api/v1/accounts/{account_id}/statuses`.
-- `timeline` — your home timeline: `GET /api/v1/timelines/home`.
+- `timeline` (or `home`) — your home timeline: `GET /api/v1/timelines/home`.
 - `#<tag>` — hashtag results: `GET /api/v1/timelines/tag/{tag}`.
 - `-m`, `--mobile` — serve from the SQLite cache instead of fetching (no network). The cache stores each status's avatar URL and media attachment URLs (`status_media`), so a kitty-capable terminal renders the same graphic layout from the local media cache.
 
-All loaded statuses are stored in the SQLite cache keyed by timeline type. The most recently used type is remembered so `--mobile` serves it too.
+All loaded statuses are stored in the SQLite cache keyed by timeline type, and the most recently loaded type is remembered. `--mobile` serves the cached listing for the requested type; with no type argument it uses the most recently loaded timeline (falling back to `profile`).
 
 ### `sloptoot delete <id-or-url>`
 1. `normalize_status_id(ref)` — a bare numeric id is used directly; a status URL has its trailing id extracted.

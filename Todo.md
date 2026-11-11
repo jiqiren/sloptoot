@@ -1,6 +1,6 @@
 # Todo — sloptoot
 
-Current version: 1.4.2 (release; media cache + offline `ls --mobile` graphics).
+Current version: 1.4.5 (release; media cache + offline `ls --mobile` graphics).
 
 ## Completed
 - [x] Project scaffolding (meson.build, cjson.wrap, libcurl, cJSON, platform sha256, stub main.c)
@@ -22,7 +22,7 @@ Current version: 1.4.2 (release; media cache + offline `ls --mobile` graphics).
 - [x] Homebrew tap (jiqiren/homebrew-tap, formula, bottles)
 - [x] Thread chaining: `toot --reply/-r` (bare = last post, `--reply <id|url>` = specific) with SQLite chain anchor
 - [x] `ls`/`--ls`/`-l` subcommand — profile / timeline / #hashtag listings
-- [x] `--mobile`/`-m` — serve `ls` from the SQLite cache, no network
+- [x] `--mobile`/`-m` — serve `ls` from the SQLite cache, no network; with no type, uses the last loaded timeline (falls back to `profile`)
 - [x] Editor compose: bare `toot` opens `$EDITOR`; empty temp file cancels (exit 0)
 - [x] SQLite status cache (dedup statuses per timeline type, last_post_id meta)
 - [x] `ls` output shows `id  relative-time  body` so listed posts can be replied to (`-r <id>`) or deleted (`delete <id>`)
